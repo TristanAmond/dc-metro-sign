@@ -4,11 +4,15 @@ import time
 import busio
 from digitalio import DigitalInOut, Pull
 import neopixel
+
 from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_esp32spi import adafruit_esp32spi_wifimanager
+
 import json
 import display_manager
+
+print("All imports loaded | Available memory: {} bytes".format(gc.mem_free()))
 
 # --- CONSTANTS SETUP ---
 
@@ -21,6 +25,17 @@ except ImportError:
 # local Metro station
 station_code = secrets["station_code"]
 historical_trains = [None, None]
+
+# weather data dict
+weather_data = {}
+# daily highest temperature
+# max_temp, day of the year
+highest_temp = [None,None]
+# daily lowest temperature
+# min_temp, day of the year
+lowest_temp = [None, None]
+# current temp (for historical)
+current_temp = []
 
 # --- DISPLAY SETUP ---
 
@@ -110,11 +125,117 @@ def get_trains(StationCode, historical_trains):
         pass
     return trains
 
+# queries Openweather API to return a dict with current and 3 hr forecast weather data
+# input is latitude and longitude coordinates for weather location
+def get_weather(weather_data):
+    try:
+        # query Openweather for weather at location defined by input lat, long
+        base_URL = 'https://api.openweathermap.org/data/3.0/onecall?'
+        latitude = secrets['dc coords x']
+        longitude = secrets['dc coords y']
+        units = 'imperial'
+        api_key = secrets['openweather api key']
+        exclude = 'minutely,alerts'
+        response = wifi.get(base_URL
+        +'lat='+latitude
+        +'&lon='+longitude
+        +'&exclude='+exclude
+        +'&units='+units
+        +'&appid='+api_key
+        )
+        weather_json = response.json()
+        del response
+
+        # insert icon and current weather data into dict
+        weather_data["icon"] = weather_json["current"]["weather"][0]["icon"]
+        weather_data["current_temp"] = weather_json["current"]["temp"]
+        weather_data["current_feels_like"] = weather_json["current"]["feels_like"]
+        # insert daily forecast min and max temperature into dict
+        weather_data["daily_temp_min"] = weather_json["daily"][0]["temp"]["min"]
+        weather_data["daily_temp_max"] = weather_json["daily"][0]["temp"]["max"]
+        # insert next hour + 1 forecast temperature and feels like into dict
+        weather_data["hourly_next_temp"] = weather_json["hourly"][2]["temp"]
+        weather_data["hourly_feels_like"] = weather_json["hourly"][2]["feels_like"]
+
+        # set daily highest temperature
+        global highest_temp
+        global current_time
+        # if daily highest temperature hasn't been set or is from a previous day
+        if highest_temp[0] is None or highest_temp[1] != current_time.tm_wday:
+            highest_temp[0] = weather_data["daily_temp_max"]
+            highest_temp[1] = current_time.tm_wday
+            print("Daily highest temp set to {}".format(highest_temp[0]))
+        # if stored highest temp is less than new highest temp
+        elif highest_temp[0] < weather_data["daily_temp_max"]:
+            highest_temp[0] = weather_data["daily_temp_max"]
+            print("Daily highest temp set to {}".format(highest_temp[0]))
+        # if stored highest temp is greater than new highest temp
+        elif highest_temp[0] > weather_data["daily_temp_max"]:
+            weather_data["daily_temp_max"] = highest_temp[0]
+            print("Daily highest temp pulled from historical data")
+
+        # set daily lowest temperature
+        global lowest_temp
+        # if daily lowest temperature hasn't been set or is from a previous day
+        if lowest_temp[0] is None or lowest_temp[1] != current_time.tm_wday:
+            lowest_temp[0] = weather_data["daily_temp_min"]
+            lowest_temp[1] = current_time.tm_wday
+            print("Daily lowest temp set to {}".format(lowest_temp[0]))
+        # if daily lowest temp is greater than new lowest temp
+        elif lowest_temp[0] > weather_data["daily_temp_min"]:
+            lowest_temp[0] = weather_data["daily_temp_min"]
+            print("Daily lowest temp set to {}".format(lowest_temp[0]))
+        # if daily lowest temp is less than new lowest temp
+        elif lowest_temp[0] < weather_data["daily_temp_min"]:
+            weather_data["daily_temp_min"] = lowest_temp[0]
+            print("Daily lowest temp pulled from historical data")
+
+        # add current temp to historical array
+        global current_temp
+        current_temp.append(weather_data["current_temp"])
+        # clean up response
+        del weather_json
+
+        # return dict with relevant data
+        return True
+
+    except Exception as e:
+        print("Failed to get data, retrying\n", e)
+        wifi.reset()
+
+# --- TIME MGMT FUNCTIONS ---
+
+def check_time():
+    base_url = "http://io.adafruit.com/api/v2/time/seconds"
+    try:
+        response = wifi.get(base_url)
+        epoch_time = int(response.text)
+        del response
+
+        global current_time
+        current_time = time.localtime(epoch_time)
+    except Exception as e:
+        print(e)
+        wifi.reset()
+
 # --- OPERATING LOOP ------------------------------------------
 loop_counter=1
+last_weather_check=None
 last_train_check=None
 
 while True:
+    check_time()
+
+    # fetch weather data on start and recurring (default: 10 minutes)
+    if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
+        weather = get_weather(weather_data)
+        if weather:
+            last_weather_check = time.monotonic()
+            print("weather updated")
+            # update weather display component
+            display_manager.update_weather(weather_data)
+        else:pass
+
     # update train data (default: 15 seconds)
     if last_train_check is None or time.monotonic() > last_train_check + 15:
         trains = get_trains(station_code, historical_trains)
