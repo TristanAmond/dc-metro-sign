@@ -258,6 +258,10 @@ def check_open(shut_off_hour):
 
     return True
 
+# --- MISC. FUNCTIONS ---
+def send_notification(text):
+    display_manager.scroll_text(text)
+
 # --- OPERATING LOOP ------------------------------------------
 loop_counter=1
 last_weather_check=None
@@ -296,6 +300,10 @@ while True:
                 last_train_check = time.monotonic()
             # update train display component
             display_manager.assign_trains(trains, historical_trains)
+
+        # send a scrolling notification on the hour (DEMO)
+        if current_time.tm_min == 0 and current_time.tm_sec < 15:
+            send_notification("Time is {}:{}0".format(current_time.tm_hour, current_time.tm_min))
 
     display_manager.refresh_display()
 
