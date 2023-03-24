@@ -13,6 +13,7 @@ Code for an LED sign displaying incoming and outgoing DC Metro train arrival tim
 - Displays real-time Metro train data from WMATA API
 - Displays weather information
 - Day/Night cycling
+- Scrolling notifications
 
 
 ## Primary Hardware Requirements
