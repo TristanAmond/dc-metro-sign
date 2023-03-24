@@ -1,6 +1,6 @@
 # Display Manager
 # Structure and some code from Weather Display Matrix project:
-#https://learn.adafruit.com/weather-display-matrix/code-the-weather-display-matrix
+# https://learn.adafruit.com/weather-display-matrix/code-the-weather-display-matrix
 
 import time
 import displayio
@@ -32,6 +32,12 @@ class display_manager(displayio.Group):
         # set up label groups
         self.root_group = displayio.Group()
         self.root_group.append(self)
+
+        # create night mode group
+        self._night_mode_group = displayio.Group()
+        # hide night mode group by default
+        self._night_mode_group.hidden = True
+        self.append(self._night_mode_group)
 
         # create parent weather group for weather display groups
         self._weather_group = displayio.Group()
@@ -210,11 +216,12 @@ class display_manager(displayio.Group):
 
             else:
                 self._temp_trend_group.hidden = True
+        # No weather_data
         else:
             self.temp_text.text = "..."
 
     # update train destination text and time to arrival
-    # input is a list of train objects and display config integer
+    # input is a list of train objects
     # TODO abstract default and error handling to support any station
     def assign_trains(self, trains, historical_trains):
         try:
@@ -262,6 +269,18 @@ class display_manager(displayio.Group):
 
         except TypeError as e:
             print(e)
+
+    def night_mode_toggle(self, trigger):
+        # night mode is activated, hide all groups
+        if trigger:
+            self._weather_group.hidden = False
+            self._train_board_group.hidden = False
+            self._night_mode_group.hidden = True
+        # night mode is deactivated, show all groups
+        else:
+            self._weather_group.hidden = True
+            self._train_board_group.hidden = True
+            self._night_mode_group.hidden = False
 
     # refresh the root group on the display
     def refresh_display(self):

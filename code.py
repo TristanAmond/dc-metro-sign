@@ -37,6 +37,8 @@ lowest_temp = [None, None]
 # current temp (for historical)
 current_temp = []
 
+current_time = None
+
 # --- DISPLAY SETUP ---
 
 # MATRIX DISPLAY MANAGER
@@ -44,7 +46,7 @@ current_temp = []
 # (https://www.adafruit.com/product/2278)
 matrix = Matrix(width=128, height=32, bit_depth=2, tile_rows=1)
 display_manager = display_manager.display_manager(matrix.display)
-print("display manager loaded")
+print("Display loaded | Available memory: {} bytes".format(gc.mem_free()))
 
 # --- WIFI SETUP ---
 # Initialize ESP32 Pins:
@@ -146,7 +148,7 @@ def get_weather(weather_data):
         weather_json = response.json()
         del response
 
-        # insert icon and current weather data into dict
+        # insert/update icon and current weather data in dict
         weather_data["icon"] = weather_json["current"]["weather"][0]["icon"]
         weather_data["current_temp"] = weather_json["current"]["temp"]
         weather_data["current_feels_like"] = weather_json["current"]["feels_like"]
@@ -157,22 +159,23 @@ def get_weather(weather_data):
         weather_data["hourly_next_temp"] = weather_json["hourly"][2]["temp"]
         weather_data["hourly_feels_like"] = weather_json["hourly"][2]["feels_like"]
 
+        # clean up response
+        del weather_json
+
+        global current_time
+
         # set daily highest temperature
         global highest_temp
-        global current_time
         # if daily highest temperature hasn't been set or is from a previous day
         if highest_temp[0] is None or highest_temp[1] != current_time.tm_wday:
             highest_temp[0] = weather_data["daily_temp_max"]
             highest_temp[1] = current_time.tm_wday
-            print("Daily highest temp set to {}".format(highest_temp[0]))
         # if stored highest temp is less than new highest temp
         elif highest_temp[0] < weather_data["daily_temp_max"]:
             highest_temp[0] = weather_data["daily_temp_max"]
-            print("Daily highest temp set to {}".format(highest_temp[0]))
         # if stored highest temp is greater than new highest temp
         elif highest_temp[0] > weather_data["daily_temp_max"]:
             weather_data["daily_temp_max"] = highest_temp[0]
-            print("Daily highest temp pulled from historical data")
 
         # set daily lowest temperature
         global lowest_temp
@@ -180,23 +183,20 @@ def get_weather(weather_data):
         if lowest_temp[0] is None or lowest_temp[1] != current_time.tm_wday:
             lowest_temp[0] = weather_data["daily_temp_min"]
             lowest_temp[1] = current_time.tm_wday
-            print("Daily lowest temp set to {}".format(lowest_temp[0]))
         # if daily lowest temp is greater than new lowest temp
         elif lowest_temp[0] > weather_data["daily_temp_min"]:
             lowest_temp[0] = weather_data["daily_temp_min"]
-            print("Daily lowest temp set to {}".format(lowest_temp[0]))
         # if daily lowest temp is less than new lowest temp
         elif lowest_temp[0] < weather_data["daily_temp_min"]:
             weather_data["daily_temp_min"] = lowest_temp[0]
-            print("Daily lowest temp pulled from historical data")
+
+        print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
 
         # add current temp to historical array
         global current_temp
         current_temp.append(weather_data["current_temp"])
-        # clean up response
-        del weather_json
 
-        # return dict with relevant data
+        # return True for updated dict
         return True
 
     except Exception as e:
@@ -212,38 +212,90 @@ def check_time():
         epoch_time = int(response.text)
         del response
 
+        # DST offset
+        # MUST UPDATE THIS FOR DAYLIGHT SAVING TIME CHANGE
+        is_dst = False
+        # Timezone offset
+        timezone_offset = -4
+
+        # Convert the timezone offset from hours to seconds
+        timezone_offset_seconds = timezone_offset * 3600
+
+        # Apply the timezone offset
+        epoch_time += timezone_offset_seconds
+
+        # Adjust for DST
+        if is_dst:
+            epoch_time -= 3600
+
         global current_time
         current_time = time.localtime(epoch_time)
+
     except Exception as e:
         print(e)
         wifi.reset()
+
+def check_open(shut_off_hour):
+
+    weekday = current_time.tm_wday
+    hour = current_time.tm_hour
+    # SET OPENING TIME
+    # current day is Sat/Sun and time is before 7
+    if hour < 7 and (weekday == 6 or weekday == 0):
+        print("Metro closed: Sat/Sun before 7| D{} H{}".format(weekday, hour))
+        return False
+
+    # current day is M-F and time is before 5
+    elif hour < 5:
+        print("Metro closed: M-F before 5 | D{} H{}".format(weekday, hour))
+        return False
+
+    #SET CLOSING TIME
+    # Check current hour against shut_off_hour (10PM default, passed in function)
+    elif hour >= shut_off_hour:
+        print("Metro closed: after 10PM, currently {}:{}".format(hour, current_time.tm_min))
+        return False
+
+    return True
 
 # --- OPERATING LOOP ------------------------------------------
 loop_counter=1
 last_weather_check=None
 last_train_check=None
+mode="Day"
 
 while True:
     check_time()
 
-    # fetch weather data on start and recurring (default: 10 minutes)
-    if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
-        weather = get_weather(weather_data)
-        if weather:
-            last_weather_check = time.monotonic()
-            print("weather updated")
+    try:
+        if check_open(22):
+            mode="Day"
+            display_manager.night_mode_toggle(True)
+        else:
+            mode="Night"
+            display_manager.night_mode_toggle(False)
+    except Exception as e:
+        print("Exception: {}".format(e))
+        pass
+    gc.collect()
+
+    if mode is "Day":
+
+        # fetch weather data on start and recurring (default: 10 minutes)
+        if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
+            weather = get_weather(weather_data)
+            if weather:
+                last_weather_check = time.monotonic()
             # update weather display component
             display_manager.update_weather(weather_data)
-        else:pass
 
-    # update train data (default: 15 seconds)
-    if last_train_check is None or time.monotonic() > last_train_check + 15:
-        trains = get_trains(station_code, historical_trains)
-        if trains:
-            last_train_check = time.monotonic()
+        # update train data (default: 15 seconds)
+        if last_train_check is None or time.monotonic() > last_train_check + 15:
+            trains = get_trains(station_code, historical_trains)
+            if trains:
+                last_train_check = time.monotonic()
             # update train display component
             display_manager.assign_trains(trains, historical_trains)
-        else:pass
 
     display_manager.refresh_display()
 
@@ -252,6 +304,11 @@ while True:
     # print available memory
     print("Loop {} available memory: {} bytes".format(loop_counter, gc.mem_free()))
 
-    # increment loop and sleep for 10 seconds
+    # increment loop and sleep
+    # Day mode: 10 seconds
+    # Night mode: 5 minutes
     loop_counter+=1
-    time.sleep(10)
+    if mode == "Day":
+        time.sleep(10)
+    elif mode == "Night":
+        time.sleep(300)
