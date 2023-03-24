@@ -45,4 +45,4 @@ Contributions are welcome! To contribute, fork the repository and create a pull 
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](https://github.com/TristanAmond/dc-metro-sign/blob/main/LICENSE.txt) file for details.
