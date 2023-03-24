@@ -22,6 +22,9 @@ metro_orange=0xf06a37
 metro_red=0xda1b30
 metro_green=0x49742a
 
+# custom scroll delay for scroll_text
+scroll_delay = 0.03
+
 class display_manager(displayio.Group):
     def __init__(
             self,
@@ -38,6 +41,12 @@ class display_manager(displayio.Group):
         # hide night mode group by default
         self._night_mode_group.hidden = True
         self.append(self._night_mode_group)
+
+        # create scrolling notification group
+        self._scrolling_group = displayio.Group()
+        # hide scrolling group by default
+        self._scrolling_group.hidden = True
+        self.append(self._scrolling_group)
 
         # create parent weather group for weather display groups
         self._weather_group = displayio.Group()
@@ -147,6 +156,13 @@ class display_manager(displayio.Group):
         self.bottom_row_train_min.color = metro_orange
         self.bottom_row_train_min.text = "0"
         self._train_board_group.append(self.bottom_row_train_min)
+
+        # create row scrolling label
+        self.scrolling_label = Label(terminalio.FONT)
+        self.scrolling_label.x = 0
+        self.scrolling_label.y = self.row1
+        self.scrolling_label.color = 0xFFFFFF
+        self._scrolling_group.append(self.scrolling_label)
 
         # default icon set to none
         self.set_icon(None)
@@ -281,6 +297,22 @@ class display_manager(displayio.Group):
             self._weather_group.hidden = True
             self._train_board_group.hidden = True
             self._night_mode_group.hidden = False
+
+    # use \n newline to access bottom row
+    def scroll_text(self, label_text):
+        self._scrolling_group.x = self.display.width
+        self.scrolling_label.text = label_text
+        self._weather_group.hidden = True
+        self._train_board_group.hidden = True
+        self._scrolling_group.hidden = False
+
+        for _ in range(self.display.width + len(label_text) * 5):
+            self._scrolling_group.x = self._scrolling_group.x - 1
+            time.sleep(scroll_delay)
+        self._scrolling_group.hidden = True
+        self._weather_group.hidden = False
+        self._train_board_group.hidden = False
+        self.refresh_display()
 
     # refresh the root group on the display
     def refresh_display(self):
