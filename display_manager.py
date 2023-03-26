@@ -11,8 +11,6 @@ from adafruit_bitmap_font import bitmap_font
 cwd = ("/" + __file__).rsplit("/", 1)[0]
 
 icon_spritesheet = cwd + "/bmp/weather-icons.bmp"
-icon_width = 16
-icon_height = 16
 
 # custom font for temperature trend indicators
 symbol_font = bitmap_font.load_font("/bdf/trend_icons.bdf")
@@ -87,8 +85,8 @@ class display_manager(displayio.Group):
         self._icon_sprite = displayio.TileGrid(
             icons,
             pixel_shader=getattr(icons, 'pixel_shader', displayio.ColorConverter()),
-            tile_width=icon_width,
-            tile_height=icon_height
+            tile_width=16,
+            tile_height=16
         )
 
         # set current temperature text
