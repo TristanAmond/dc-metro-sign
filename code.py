@@ -75,6 +75,14 @@ class Train:
         self.destination_code = destination_code
         self.minutes = minutes
 
+class Event:
+    def __init__(self, summary, location, seconds, station, departure_time):
+        self.summary = summary
+        self.location = location
+        self.seconds = seconds
+        self.station = station
+        self.departure_time = departure_time
+
 # --- API CALLS ---
 
 # queries WMATA API to return an array of two Train objects
@@ -203,6 +211,23 @@ def get_weather(weather_data):
     except Exception as e:
         print("Failed to get data, retrying\n", e)
         wifi.reset()
+
+
+# retrieve an event from a local Raspberry Pi
+def get_next_event():
+    try:
+        response = wifi.get("http://{}/events/events.json".format(secrets['ip_address']))
+        json_data = response.json()
+        del response
+    except Exception as e:
+        print("Failed to get data, retrying\n", e)
+        wifi.reset()
+    try:
+        event = Event(**json_data)
+        return event
+    except Exception as e:
+        print("Probably no events scheduled: {}".format(e))
+        return None
 
 # --- TIME MGMT FUNCTIONS ---
 
