@@ -4,6 +4,7 @@ import time
 import busio
 from digitalio import DigitalInOut, Pull
 import neopixel
+import supervisor
 
 from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
@@ -311,6 +312,14 @@ while True:
     gc.collect()
     # print available memory
     print("Loop {} available memory: {} bytes".format(loop_counter, gc.mem_free()))
+
+    # if any checks haven't run in a long time, restart the Matrix Portal
+    # weather check: 60 minutes
+    # train check: 10 minutes
+    if time.monotonic() > last_weather_check + 60 * 60 or time.monotonic() > last_train_check + 60 * 10:
+        print("Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(last_weather_check, last_train_check))
+        time.sleep(5)
+        supervisor.reload()
 
     # increment loop and sleep
     # Day mode: 10 seconds
