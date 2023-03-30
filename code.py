@@ -39,6 +39,7 @@ lowest_temp = [None, None]
 current_temp = []
 
 current_time = None
+current_time_epoch = None
 
 # --- DISPLAY SETUP ---
 
@@ -226,8 +227,25 @@ def get_next_event():
         event = Event(**json_data)
         return event
     except Exception as e:
-        print("Probably no events scheduled: {}".format(e))
+        #print("Probably no events scheduled: {}".format(e))
         return None
+    return 1
+
+def event_mode_switch(next_event):
+    global mode
+    departure_diff = minutes_until_departure(next_event.departure_time)
+
+    # if departure time is further than 60 minutes away, do nothing
+    if departure_diff > 60:
+        print(f"{departure_diff} minutes until departure")
+        pass
+    # if departure time is within 60 minutes, switch mode to event
+    elif 0 < departure_diff < 60:
+        mode="Event"
+    # if departure time is 0 or less than 0, reset mode
+    else:
+        mode="Day"
+
 
 # --- TIME MGMT FUNCTIONS ---
 
@@ -238,7 +256,17 @@ def check_time():
         epoch_time = int(response.text)
         del response
 
-        # DST offset
+        global current_time
+        global current_time_epoch
+        current_time = convert_epoch_to_struct(epoch_time)
+        current_time_epoch = epoch_time
+
+    except Exception as e:
+        print(e)
+        wifi.reset()
+
+def convert_epoch_to_struct(epoch_time):
+            # DST offset
         # MUST UPDATE THIS FOR DAYLIGHT SAVING TIME CHANGE
         is_dst = False
         # Timezone offset
@@ -254,12 +282,18 @@ def check_time():
         if is_dst:
             epoch_time -= 3600
 
-        global current_time
-        current_time = time.localtime(epoch_time)
+        return time.localtime(epoch_time)
 
-    except Exception as e:
-        print(e)
-        wifi.reset()
+# Calculates difference between two epoch times
+# Input is a departure time in epoch time
+# Output is difference between departure and last current time in minutes
+def minutes_until_departure(departure_time):
+    global current_time_epoch
+    if current_time_epoch is not None:
+        difference = departure_time - current_time_epoch
+        return round(difference / 60)
+    else:
+        return None
 
 def check_open(shut_off_hour):
 
@@ -292,15 +326,21 @@ def send_notification(text):
 loop_counter=1
 last_weather_check=None
 last_train_check=None
+last_event_check=None
+next_event=None
 mode="Day"
 
 while True:
+    # update current time struct and epoch
     check_time()
 
+    # check if display should be in night mode
     try:
-        if check_open(22):
+        if check_open(22) and mode!="Event":
             mode="Day"
             display_manager.night_mode_toggle(True)
+        elif check_open(22) and mode=="Event":
+            pass
         else:
             mode="Night"
             display_manager.night_mode_toggle(False)
@@ -309,8 +349,8 @@ while True:
         pass
     gc.collect()
 
+    # run day mode actions
     if mode is "Day":
-
         # fetch weather data on start and recurring (default: 10 minutes)
         if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
             weather = get_weather(weather_data)
@@ -325,32 +365,66 @@ while True:
             if trains:
                 last_train_check = time.monotonic()
             # update train display component
-            display_manager.assign_trains(trains, historical_trains)
+            display_manager.update_trains(trains, historical_trains)
+
+        # update event data (default: 15 seconds)
+        if last_event_check is None or time.monotonic() > last_event_check + 15:
+            next_event = get_next_event()
+            if next_event:
+                print(f"Event found: {next_event.summary}")
+                event_mode_switch(next_event)
+            last_event_check = time.monotonic()
 
         # send a scrolling notification on the hour (DEMO)
         if current_time.tm_min == 0 and current_time.tm_sec < 15:
             send_notification("Time is {}:{}0".format(current_time.tm_hour, current_time.tm_min))
 
-    display_manager.refresh_display()
+    # run event mode actions
+    if mode is "Event":
+        # fetch weather data on start and recurring (default: 10 minutes)
+        if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
+            weather = get_weather(weather_data)
+            if weather:
+                last_weather_check = time.monotonic()
+            # update weather display component
+            display_manager.update_weather(weather_data)
 
+        # calculate time until departure
+        departure_countdown = minutes_until_departure(next_event.departure_time)
+        if departure_countdown >=1:
+            #test printing TODO remove
+            departure_time = convert_epoch_to_struct(next_event.departure_time)
+            print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
+            current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min, departure_countdown)
+            )
+            # update display with headsign/station and time to departure
+            display_manager.update_event(next_event.station, departure_countdown)
+        else:
+            mode="Day"
+
+    # refresh display
+    display_manager.refresh_display()
     # run garbage collection
     gc.collect()
     # print available memory
-    print("Loop {} available memory: {} bytes".format(loop_counter, gc.mem_free()))
+    print("Loop {} | Available memory: {} bytes".format(loop_counter, gc.mem_free()))
 
     # if any checks haven't run in a long time, restart the Matrix Portal
     # weather check: 60 minutes
     # train check: 10 minutes
-    if time.monotonic() > last_weather_check + 60 * 60 or time.monotonic() > last_train_check + 60 * 10:
+    if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 600) and (last_time_check is None or time.monotonic() - last_time_check >= 3600)):
         print("Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(last_weather_check, last_train_check))
         time.sleep(5)
         supervisor.reload()
 
-    # increment loop and sleep
+    # Increment loop and sleep
     # Day mode: 10 seconds
+    # Event mode: 50 seconds
     # Night mode: 5 minutes
     loop_counter+=1
     if mode == "Day":
         time.sleep(10)
-    elif mode == "Night":
+    elif mode == "Event":
+        time.sleep(50)
+    else:
         time.sleep(300)
