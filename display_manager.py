@@ -237,7 +237,7 @@ class display_manager(displayio.Group):
     # update train destination text and time to arrival
     # input is a list of train objects
     # TODO abstract default and error handling to support any station
-    def assign_trains(self, trains, historical_trains):
+    def update_trains(self, trains, historical_trains):
         try:
             if trains[0] is not None:
                 self.top_row_train_text.text = trains[0].destination
@@ -283,6 +283,32 @@ class display_manager(displayio.Group):
 
         except TypeError as e:
             print(e)
+
+    def update_event(self, station, departure_countdown):
+        # station is Shady Grove
+        if "shady" in station:
+            self.top_row_train_text.text = "Shady Gr"
+        # station is Glenmont
+        else:
+            self.top_row_train_text.text = "Glenmont"
+        self.top_row_train_min.text = "in"
+
+        # set proper grammar for singular remaining minute
+        if departure_countdown > 1:
+            self.bottom_row_train_text.text = "{} minutes".format(departure_countdown)
+        else:
+            self.bottom_row_train_text.text = "{} minute".format(departure_countdown)
+        self.bottom_row_train_min.text = ""
+
+        # set color based on minutes remaining
+        if departure_countdown <= 10:
+            self.bottom_row_train_text.color = metro_red
+        else:
+            self.bottom_row_train_text.color = metro_orange
+
+        self.top_row_train_text.color = metro_orange
+        self.top_row_train_min.color = metro_orange
+
 
     def night_mode_toggle(self, trigger):
         # night mode is activated, hide all groups
