@@ -27,7 +27,6 @@ Code for an LED sign displaying incoming and outgoing DC Metro train arrival tim
 - Adafruit IO Time ([source](https://io.adafruit.com/api/docs/#time))
 
 ## Getting Started
-
 Clone the repo and transfer all files to a MatrixPortal running CircuitPython.
 
 ## Usage
