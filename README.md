@@ -1,6 +1,7 @@
 # DC Metro Sign
 
 Code for an LED sign displaying incoming and outgoing DC Metro train arrival times so you'll never miss a train again! The v1.0.0 release also includes current weather conditions sourced from OpenWeather, along with daily minimum and maximum temperatures.
+Find the full [build log here](https://tristanamond.substack.com/)!
 ## Table of Contents
 - [Features](#features)
 - [Primary Hardware Requirements](#primary-hardware-requirements)
