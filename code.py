@@ -301,7 +301,7 @@ def check_open(shut_off_hour):
     hour = current_time.tm_hour
     # SET OPENING TIME
     # current day is Sat/Sun and time is before 7
-    if hour < 7 and (weekday == 6 or weekday == 0):
+    if hour < 7 and (weekday >= 5):
         print("Metro closed: Sat/Sun before 7| D{} H{}".format(weekday, hour))
         return False
 
@@ -329,6 +329,8 @@ last_train_check=None
 last_event_check=None
 next_event=None
 mode="Day"
+
+#TODO switch counters to loop modulos to save memory
 
 while True:
     # update current time struct and epoch
