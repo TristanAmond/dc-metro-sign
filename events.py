@@ -1,11 +1,13 @@
 from __future__ import print_function
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
+from datetime import time as datetime_time
 from dateutil import parser
 import pytz
 import os
 import json
 import requests
+import time
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -70,8 +72,8 @@ def retrieve_next_event(lookahead_days=3, calendar_id=secrets['calendarId'], tim
         # Call the Calendar API
         tz = timezone
         now = datetime.now(tz).date()
-        start = datetime.combine(now, time.min).isoformat() + 'Z'  # start of today
-        end = (datetime.combine(now, time.max) + timedelta(days=lookahead_days)).isoformat() + 'Z'  # end of lookahead
+        start = datetime.combine(now, datetime_time.min).isoformat() + 'Z'  # start of today
+        end = (datetime.combine(now, datetime_time.max) + timedelta(days=lookahead_days)).isoformat() + 'Z'  # end of lookahead
         events_result = service.events().list(calendarId=calendar_id, timeMin=start,
                                               timeMax=end, singleEvents=True,
                                               orderBy='startTime').execute()
@@ -189,26 +191,38 @@ def convert_struct_to_epoch(struct):
 
 # --- MAIN ---
 def main():
-    next_event = retrieve_next_event()
-    # check if there is a next event and if it has a destination
-    if next_event is not None and next_event.destination is not None:
-        # retrieve directions JSON from Google Directions API
-        directions = get_directions(next_event)
-        # if the call is successful, populate departure time and train from directions response
-        if directions is not None:
-            next_event.departure_time = get_departure_time(directions)
-            next_event.departure_train = get_departure_train(directions)
 
-            print(repr(next_event))
-            # write JSON to file
-            write_to_json(next_event)
+    while True:
+        next_event = retrieve_next_event()
+        # check if there is a next event and if it has a destination
+        if next_event is not None and next_event.destination is not None:
+            # retrieve directions JSON from Google Directions API
+            directions = get_directions(next_event)
+            # if the call is successful, populate departure time and train from directions response
+            if directions is not None:
+                next_event.departure_time = get_departure_time(directions)
+                next_event.departure_train = get_departure_train(directions)
 
-        # if the call is unsuccessful, print error
+                print(repr(next_event))
+                # write JSON to file
+                write_to_json(next_event)
+
+                #calculate time until departure
+                time_diff = next_event.departure_time - int(datetime.now().timestamp())
+                # if time is less than half an hour, decrease wait time
+                if time_diff < 1800:
+                    time.sleep(15)
+                else:
+                    time.sleep(300)
+
+            # if the call is unsuccessful, print error
+            else:
+                print("Could not retrieve directions")
+                time.sleep(300)
+        # if there is no next event
         else:
-            print("Could not retrieve directions")
-    # if there is no next event
-    else:
-        print("No events found")
+            print("No events found")
+            time.sleep(300)
 
 if __name__ == '__main__':
     main()
