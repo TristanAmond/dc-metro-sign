@@ -19,7 +19,7 @@ from googleapiclient.errors import HttpError
 try:
     from secrets import secrets
 except ImportError:
-    print("Please add your secrets.py file with home address and Google API key to this directory")
+    print("Please add your secrets.py file to this directory")
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -48,6 +48,8 @@ class Event:
 # outputs: Event object
 def retrieve_next_event(lookahead_days=3, calendar_id=secrets['calendarId'], timezone = pytz.timezone('America/New_York')):
 
+    # change directory to credentials location
+    os.chdir(secrets['google credentials location'])
     creds = None
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
