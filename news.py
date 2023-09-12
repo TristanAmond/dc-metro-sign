@@ -134,7 +134,7 @@ def main(start_time=6, end_time=21, news_source="gnews"):
     while True:
         current_hour = time.localtime().tm_hour
 
-        # If time of day is between start_time (default: 6 AM) and end_time (default: 10 PM) (inclusive)
+        # If time of day is between start_time (default: 6 AM) and end_time (default: 9 PM) (inclusive)
         if start_time <= current_hour <= end_time:
             json_data = None
             try:
