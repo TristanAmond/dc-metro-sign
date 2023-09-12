@@ -1,25 +1,34 @@
-from __future__ import print_function
-
+# Standard library imports
+import os
+import sys
+import json
+import time
 from datetime import datetime, timedelta
 from datetime import time as datetime_time
+
+# Third-party library imports
+import requests
 from dateutil import parser
 import pytz
-import os
-import json
-import requests
-import time
 
+# Google API-related imports
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# import secrets file for origin location and Google API key
+# import secrets directory for origin location, Google API key and file locations
 try:
-    from secrets import secrets
-except ImportError:
-    print("Please add your secrets.py file to this directory")
+    # Get the directory of the current script
+    current_directory = os.path.dirname(os.path.abspath(__file__))
+    # Add the parent directory to the Python path
+    parent_directory = os.path.abspath(os.path.join(current_directory, '..'))
+    sys.path.append(parent_directory)
+    # Import secrets directory
+    from creds import secrets
+except ImportError as e:
+    print(f"Import Error: {e}")
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -50,6 +59,7 @@ def retrieve_next_event(lookahead_days=3, calendar_id=secrets['calendarId'], tim
 
     # change directory to credentials location
     os.chdir(secrets['google credentials location'])
+
     creds = None
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
@@ -138,28 +148,29 @@ def get_directions(event):
 # inputs: directions_json
 # outputs: train headsign (str)
 def get_departure_train(directions_json):
+    """
+    Retrieves the departure train headsign from the given directions JSON.
 
-    # store the first stop with Metro directions
-    first_metro_step = None
-    if 'routes' in directions_json:
-        # Check if there is at least one route
-        if directions_json['routes'][0]:
-            # Check if the route contains legs
-            if 'legs' in directions_json['routes'][0]:
-                # Loop through the legs
-                for leg in directions_json['routes'][0]['legs']:
-                    # Check if the leg contains steps
-                    if 'steps' in leg:
-                        steps = leg['steps']
-                        # Loop through the steps to find the first TRANSIT step and save it
-                        for step in steps:
-                            if step['travel_mode'] == 'TRANSIT':
-                                first_metro_step = step
-                                break
-        # return train headsign (e.g. "Glenmont")
-        return first_metro_step['transit_details']['headsign']
-    else:
-        return "Error: No routes found"
+    Args:
+        directions_json (dict): A JSON object containing the directions information.
+
+    Returns:
+        str or None: The headsign of the departure train, or None if no transit steps are found.
+    """
+    try:
+        if 'routes' in directions_json and directions_json['routes']:
+            for route in directions_json['routes']:
+                if 'legs' in route and route['legs']:
+                    for leg in route['legs']:
+                        if 'steps' in leg:
+                            for step in leg['steps']:
+                                if step.get('travel_mode') == 'TRANSIT':
+                                    return step['transit_details']['headsign']
+        print("Error: No transit steps found")
+    except Exception as e:
+        print(f"Error: {e}")
+    return None
+
 
 def get_departure_time(directions_json):
     # check if there is at least one route
@@ -176,7 +187,7 @@ def get_departure_time(directions_json):
 # Use custom Event JSON serialization to write JSON to file available on local network
 def write_to_json(next_event):
     # set filepath for JSON file
-    filepath = secrets['JSON file location']
+    filepath = os.path.join(secrets['JSON file location'], 'next_event.json')
 
     # write JSON to file
     with open(filepath, 'w') as json_file:
@@ -220,7 +231,7 @@ def main():
             # if the call is unsuccessful, print error
             else:
                 print("Could not retrieve directions")
-                time.sleep(300)
+                time.sleep(30)
         # if there is no next event
         else:
             print("No events found")
