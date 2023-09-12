@@ -31,10 +31,10 @@ historical_trains = [None, None]
 historical_planes = {}
 
 # Stores next event data
-next_event = {}
+next_event = None
 
 # Stores most recent headline
-headline = {}
+current_headline = None
 
 # Weather data dict
 weather_data = {}
@@ -304,6 +304,7 @@ def get_next_event():
         try:
             next_event['departure_time'] = json_data['departure_time']
             next_event['departure_train'] = json_data['departure_train']
+            print(next_event)
             return next_event
         except Exception as e:
             print("Probably no events scheduled: {}".format(e))
@@ -331,7 +332,8 @@ def event_mode_switch(departure_time, diff=60):
 
 # --- HEADLINE FUNCTIONS ---
 
-def get_headline():
+def get_headline(headline):
+    global current_headline
     try:
         response = wifi.get(secrets['headline_json_url'])
         json_data = response.json()
@@ -340,17 +342,22 @@ def get_headline():
         print("Failed to get HEADLINE data: {}".format(e))
         return None
     if json_data is not None:
+        new_headline = {}
         try:
-            headline['source'] = json_data['source']
-            headline['publishedTime'] = json_data['publishedTime']
-            headline['title'] = json_data['title']
-            return headline
+            new_headline['source'] = json_data['source']
+            new_headline['publishedTime'] = json_data['publishedTime']
+            new_headline['title'] = json_data['title']
         except Exception as e:
-            print("Failed to store HEADLINE data: {}".format(e))
+            print("Failed to create HEADLINE object: {}".format(e))
             return None
-    else:
-        print("Failed to get HEADLINE data")
+    # Check to see if the headline has changed
+    if headline is not None and dict(headline == current_headline):
         return None
+    # if no current headline exists, return new headline
+    else:
+        # update headline, create headline string and pass to notification function
+        current_headline = new_headline
+        return current_headline
 
 
 # --- TIME MGMT FUNCTIONS ---
@@ -432,7 +439,8 @@ def check_open(start=start_time, end=end_time):
         return True
 
     # Not in operating hours
-    else: return False
+    else:
+        return False
 
 
 # --- MISC. FUNCTIONS ---
@@ -447,8 +455,8 @@ def main():
     last_train_check = None
     last_plane_check = None
     last_event_check = None
-    last_time_check = None
     last_headline_check = None
+    new_headline = None
     global mode
     mode = "Day"
 
@@ -457,7 +465,6 @@ def main():
     while True:
         # update current time struct and epoch
         check_time()
-        last_time_check = time.monotonic()
 
         # check if display should be in night mode
         try:
@@ -479,7 +486,7 @@ def main():
             # fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 try:
-                    weather = get_weather(weather_data)
+                    get_weather(weather_data)
                     # update weather display component
                     display_manager.update_weather(weather_data)
                 except Exception as e:
@@ -507,8 +514,10 @@ def main():
             # update event data (default: 5 minutes)
             if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
                 try:
-                    # check for event departure data
-                    if get_next_event():
+                    # check for event departure
+                    global next_event
+                    next_event = get_next_event()
+                    if next_event is not None:
                         # switch to event mode if time is within an hour
                         event_mode_switch(next_event['departure_time'])
                         pass
@@ -519,19 +528,23 @@ def main():
                 last_event_check = time.monotonic()
 
             # update top headline (default: 1 minute)
-            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1:
+            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1 and loop_counter >= 2:
+                global current_headline
                 try:
-                    new_headline = get_headline()
-                    # Check to see if the headline has changed
-                    if dict(new_headline == headline):
-                        pass
-                    else:
-                        # update headline, create headline string and pass to notification function
-                        headline = new_headline
-                        headline_string = f"{headline['publishedTime']} | {headline['source']}\n{headline['title']}"
-                        send_notification(headline_string)
+                    headline = get_headline(current_headline)
                 except Exception as e:
                     print(f"Headline error: {e}")
+
+                if headline is not None:
+                    try:
+                        headline_string = f"{current_headline['publishedTime']} | {current_headline['source']}\n{current_headline['title']}"
+                        print("pushing headline: {}".format(current_headline['title']))
+                        send_notification(headline_string)
+                    except Exception as e:
+                        print(f"Headline error: {e}")
+                else:
+                    print("Failed to get HEADLINE data")
+                last_headline_check = time.monotonic()
 
             # send a scrolling notification on the hour (DEMO)
             if current_time.tm_min == 0 and current_time.tm_sec < 15:
