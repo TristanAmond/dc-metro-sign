@@ -23,34 +23,37 @@ except ImportError:
     print("Wifi + constants are kept in secrets.py, please add them there!")
     raise
 
-# local Metro station
+# Local Metro station
 station_code = secrets["station_code"]
 historical_trains = [None, None]
 
-# stores recent Plane data to avoid repetition
+# Stores recent Plane data to avoid repetition
 historical_planes = {}
 
-# stores next event data
+# Stores next event data
 next_event = {}
 
-# weather data dict
+# Stores most recent headline
+headline = {}
+
+# Weather data dict
 weather_data = {}
-# daily highest temperature
+# Daily highest temperature
 # max_temp, day of the year
-highest_temp = [None,None]
-# daily lowest temperature
+highest_temp = [None, None]
+# Daily lowest temperature
 # min_temp, day of the year
 lowest_temp = [None, None]
-# current temp (for historical)
+# Current temp (for historical)
 current_temp = []
 
-# current time
+# Current time
 current_time = None
 current_time_epoch = None
 
-# shutoff hour
-# DEFAULT IS 9PM
-shut_off_hour = 21
+# Default operating hour start and end times
+start_time = 6
+end_time = 21
 
 # --- DISPLAY SETUP ---
 
@@ -73,10 +76,11 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 status_light = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.2)
 # Initialize wifi object
 wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, status_light, attempts=5)
-#wifi.connect()
+# wifi.connect()
 
 gc.collect()
 print("WiFi loaded | Available memory: {} bytes".format(gc.mem_free()))
+
 
 # --- CLASSES ---
 
@@ -86,6 +90,7 @@ class Train:
         self.destination_name = destination_name
         self.destination_code = destination_code
         self.minutes = minutes
+
 
 class Plane:
     def __init__(self, flight, alt_geom, lat, lon):
@@ -98,6 +103,7 @@ class Plane:
 
     def get_location(self):
         return self.location
+
 
 # --- TRANSIT API CALLS ---
 
@@ -116,8 +122,8 @@ def get_trains(StationCode, historical_trains):
         wifi.reset()
 
     # set up two train directions (A station code and B station code)
-    A_train=None
-    B_train=None
+    A_train = None
+    B_train = None
     # check trains in json response for correct destination code prefixes
     try:
         for item in json_data['Trains']:
@@ -133,12 +139,12 @@ def get_trains(StationCode, historical_trains):
                 pass
 
     except Exception as e:
-        print ("Error accessing the WMATA API: ", e)
+        print("Error accessing the WMATA API: ", e)
         pass
 
     # merge train objects into trains array
     # NOTE: None objects accepted, handled by update_trains function in display_manager.py
-    trains=[A_train,B_train]
+    trains = [A_train, B_train]
     # if train objects exist in trains array, add them to historical trains
     if A_train is not None:
         historical_trains[0] = A_train
@@ -151,6 +157,7 @@ def get_trains(StationCode, historical_trains):
     except:
         pass
     return trains
+
 
 # queries local ADS-B reciever with readsb installed for flight data
 # adds unseen flights to the plane array
@@ -189,7 +196,7 @@ def get_planes(historical_planes):
                     # add to historical plane dict if not already there
                     if entry["flight"].strip() not in historical_planes:
                         historical_planes[new_plane.flight] = new_plane
-                        plane_counter+=1
+                        plane_counter += 1
                 except:
                     print("couldn't add plane?")
         print("found {} new planes | {} total planes".format(plane_counter, len(historical_planes)))
@@ -215,12 +222,12 @@ def get_weather(weather_data):
         api_key = secrets['openweather api key']
         exclude = 'minutely,alerts'
         response = wifi.get(base_URL
-        +'lat='+latitude
-        +'&lon='+longitude
-        +'&exclude='+exclude
-        +'&units='+units
-        +'&appid='+api_key
-        )
+                            + 'lat=' + latitude
+                            + '&lon=' + longitude
+                            + '&exclude=' + exclude
+                            + '&units=' + units
+                            + '&appid=' + api_key
+                            )
         weather_json = response.json()
         del response
 
@@ -304,6 +311,7 @@ def get_next_event():
     else:
         return None
 
+
 # switches mode to event if calculated departure is within 60 minutes
 def event_mode_switch(departure_time, diff=60):
     global mode
@@ -315,10 +323,34 @@ def event_mode_switch(departure_time, diff=60):
         pass
     # if departure time is within timeframe, switch mode to event
     elif 0 < departure_diff < diff:
-        mode="Event"
+        mode = "Event"
     # if departure time is 0 or less than 0, reset mode
     else:
-        mode="Day"
+        mode = "Day"
+
+
+# --- HEADLINE FUNCTIONS ---
+
+def get_headline():
+    try:
+        response = wifi.get(secrets['headline_json_url'])
+        json_data = response.json()
+        del response
+    except Exception as e:
+        print("Failed to get HEADLINE data: {}".format(e))
+        return None
+    if json_data is not None:
+        try:
+            headline['source'] = json_data['source']
+            headline['publishedTime'] = json_data['publishedTime']
+            headline['title'] = json_data['title']
+            return headline
+        except Exception as e:
+            print("Failed to store HEADLINE data: {}".format(e))
+            return None
+    else:
+        print("Failed to get HEADLINE data")
+        return None
 
 
 # --- TIME MGMT FUNCTIONS ---
@@ -339,28 +371,28 @@ def check_time():
         print(e)
         wifi.reset()
 
+
 def convert_epoch_to_struct(epoch_time):
-            # DST offset
-        # MUST UPDATE THIS FOR DAYLIGHT SAVING TIME CHANGE
-        is_dst = False
-        # Timezone offset
-        timezone_offset = -4
+    # DST offset
+    # MUST UPDATE THIS FOR DAYLIGHT SAVING TIME CHANGE
+    is_dst = False
+    # Timezone offset
+    timezone_offset = -4
 
-        # Convert the timezone offset from hours to seconds
-        timezone_offset_seconds = timezone_offset * 3600
+    # Convert the timezone offset from hours to seconds
+    timezone_offset_seconds = timezone_offset * 3600
 
-        # Apply the timezone offset
-        epoch_time += timezone_offset_seconds
+    # Apply the timezone offset
+    epoch_time += timezone_offset_seconds
 
-        # Adjust for DST
-        if is_dst:
-            epoch_time -= 3600
+    # Adjust for DST
+    if is_dst:
+        epoch_time -= 3600
 
-        return time.localtime(epoch_time)
+    return time.localtime(epoch_time)
+
 
 def convert_struct_to_epoch(struct_time):
-
-
     date, t = struct_time.split("T")
 
     year, month, day = map(int, date.split("-"))
@@ -373,6 +405,7 @@ def convert_struct_to_epoch(struct_time):
 
     return epoch_time
 
+
 # Calculates difference between two epoch times
 # Input is a departure time in epoch time
 # Output is difference between departure and last current time in minutes
@@ -384,171 +417,198 @@ def minutes_until_departure(departure_time):
     else:
         return None
 
-def check_open(shut_off_hour):
 
+def check_open(start=start_time, end=end_time):
     weekday = current_time.tm_wday
     hour = current_time.tm_hour
-    # SET OPENING TIME
-    # current day is Sat/Sun
-    # DEFAULT SET TO 7AM
-    if hour < 7 and (weekday >= 5):
+
+    # Within operating hours, current day is Sat/Sun
+    if hour < start + 1 and (weekday >= 5):
         print("Metro closed: Sat/Sun before 7| D{} H{}".format(weekday, hour))
         return False
 
-    # current day is M-F
-    # DEFAULT SET TO 6AM
-    elif hour < 6:
-        print("Metro closed: M-F before 5 | D{} H{}".format(weekday, hour))
-        return False
+    # Within operating hours, current day is M-F
+    elif start <= hour < end:
+        return True
 
-    #SET CLOSING TIME
-    # Check current hour against shut_off_hour (10PM default, passed in function)
-    elif hour >= shut_off_hour:
-        print("Metro closed: after 10PM, currently {}:{}".format(hour, current_time.tm_min))
-        return False
+    # Not in operating hours
+    else: return False
 
-    return True
 
 # --- MISC. FUNCTIONS ---
 def send_notification(text):
     display_manager.scroll_text(text)
 
+
 # --- OPERATING LOOP ------------------------------------------
-loop_counter=1
-last_weather_check=None
-last_train_check=None
-last_plane_check=None
-last_event_check=None
-last_time_check=None
-mode="Day"
+def main():
+    loop_counter = 1
+    last_weather_check = None
+    last_train_check = None
+    last_plane_check = None
+    last_event_check = None
+    last_time_check = None
+    last_headline_check = None
+    global mode
+    mode = "Day"
 
-#TODO switch counters to loop modulos to save memory
+    # TODO switch counters to loop modulos to save memory
 
-while True:
-    # update current time struct and epoch
-    check_time()
-    last_time_check = time.monotonic()
+    while True:
+        # update current time struct and epoch
+        check_time()
+        last_time_check = time.monotonic()
 
-    # check if display should be in night mode
-    try:
-        if check_open(shut_off_hour) and mode!="Event":
-            mode="Day"
-            display_manager.night_mode_toggle(True)
-        elif check_open(shut_off_hour) and mode=="Event":
+        # check if display should be in night mode
+        try:
+            if check_open() and mode != "Event":
+                mode = "Day"
+                display_manager.night_mode_toggle(True)
+            elif check_open() and mode == "Event":
+                pass
+            else:
+                mode = "Night"
+                display_manager.night_mode_toggle(False)
+        except Exception as e:
+            print("Exception: {}".format(e))
             pass
-        else:
-            mode="Night"
-            display_manager.night_mode_toggle(False)
-    except Exception as e:
-        print("Exception: {}".format(e))
-        pass
-    gc.collect()
+        gc.collect()
 
-    # run day mode actions
-    if mode is "Day":
-        # fetch weather data on start and recurring (default: 10 minutes)
-        if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
-            try:
+        # run day mode actions
+        if mode is "Day":
+            # fetch weather data on start and recurring (default: 10 minutes)
+            if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
+                try:
+                    weather = get_weather(weather_data)
+                    # update weather display component
+                    display_manager.update_weather(weather_data)
+                except Exception as e:
+                    print(f"Weather error: {e}")
+                last_weather_check = time.monotonic()
+
+            # update train data (default: 15 seconds)
+            if last_train_check is None or time.monotonic() > last_train_check + 15:
+                try:
+                    trains = get_trains(station_code, historical_trains)
+                    # update train display component
+                    display_manager.update_trains(trains, historical_trains)
+                except Exception as e:
+                    print(f"Train error: {e}")
+                last_train_check = time.monotonic()
+
+            # update plane data (default: 5 minutes)
+            if last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5:
+                try:
+                    planes = get_planes(historical_planes)
+                except Exception as e:
+                    print(f"Plane error: {e}")
+                last_plane_check = time.monotonic()
+
+            # update event data (default: 5 minutes)
+            if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
+                try:
+                    # check for event departure data
+                    if get_next_event():
+                        # switch to event mode if time is within an hour
+                        event_mode_switch(next_event['departure_time'])
+                        pass
+                    else:
+                        print("no event found.")
+                except Exception as e:
+                    print(f"Event error: {e}")
+                last_event_check = time.monotonic()
+
+            # update top headline (default: 1 minute)
+            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1:
+                try:
+                    new_headline = get_headline()
+                    # Check to see if the headline has changed
+                    if dict(new_headline == headline):
+                        pass
+                    else:
+                        # update headline, create headline string and pass to notification function
+                        headline = new_headline
+                        headline_string = f"{headline['publishedTime']} | {headline['source']}\n{headline['title']}"
+                        send_notification(headline_string)
+                except Exception as e:
+                    print(f"Headline error: {e}")
+
+            # send a scrolling notification on the hour (DEMO)
+            if current_time.tm_min == 0 and current_time.tm_sec < 15:
+                send_notification("Time is {}:0{}".format(current_time.tm_hour, current_time.tm_min))
+
+        # run event mode actions
+        if mode is "Event":
+            # fetch weather data on start and recurring (default: 10 minutes)
+            if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 weather = get_weather(weather_data)
+                if weather:
+                    last_weather_check = time.monotonic()
                 # update weather display component
                 display_manager.update_weather(weather_data)
-            except Exception as e:
-                print(f"Weather error: {e}")
-            last_weather_check = time.monotonic()
 
-        # update train data (default: 15 seconds)
-        if last_train_check is None or time.monotonic() > last_train_check + 15:
+            # calculate time until departure
+            departure_countdown = minutes_until_departure(next_event['departure_time'])
+            if departure_countdown >= 1:
+                # test printing TODO remove
+                departure_time = convert_epoch_to_struct(next_event['departure_time'])
+                print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
+                    current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min,
+                    departure_countdown)
+                )
+                # update display with headsign/station and time to departure
+                display_manager.update_event(departure_countdown, next_event['departure_train'])
+            else:
+                next_event = {}
+                mode = "Day"
+
+        # display top plane data every 40 loops
+        # TODO find closest plane and display when within a certain distance
+        if loop_counter % 40 == 0 and len(planes) > 0:
             try:
-                trains = get_trains(station_code, historical_trains)
-                # update train display component
-                display_manager.update_trains(trains, historical_trains)
+                plane = planes.popitem()[1]
+                display_manager.scroll_text("Flight {}\n  Alt: {}".format(plane.flight, plane.alt_geom))
             except Exception as e:
-                print(f"Train error: {e}")
-            last_train_check = time.monotonic()
+                print(f"Plane Notification Error: {e}")
 
-        # update plane data (default: 5 minutes)
-        if last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5:
-            try:
-                planes = get_planes(historical_planes)
-            except Exception as e:
-                print(f"Plane error: {e}")
-            last_plane_check = time.monotonic()
+        # refresh display
+        display_manager.refresh_display()
+        # run garbage collection
+        gc.collect()
+        # print available memory
+        print("Loop {} | {} Mode | Available memory: {} bytes".format(loop_counter, mode, gc.mem_free()))
 
-        # update event data (default: 15 seconds)
-        if last_event_check is None or time.monotonic() > last_event_check + 300:
-            try:
-                # check for event departure data
-                if get_next_event():
-                    # switch to event mode if time is within an hour
-                    event_mode_switch(next_event['departure_time'])
-                    pass
-                else:
-                    print("no event found.")
-            except Exception as e:
-                print(f"Event error: {e}")
-            last_event_check = time.monotonic()
+        # if any checks haven't run in a long time, restart the Matrix Portal
+        # weather check: 60 minutes
+        # train check: 10 minutes
+        if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 600) and (
+                last_time_check is None or time.monotonic() - last_time_check >= 3600)):
+            print("Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(last_weather_check,
+                                                                                               last_train_check))
+            time.sleep(5)
+            supervisor.reload()
 
-        # send a scrolling notification on the hour (DEMO)
-        if current_time.tm_min == 0 and current_time.tm_sec < 15:
-            send_notification("Time is {}:0{}".format(current_time.tm_hour, current_time.tm_min))
-
-    # run event mode actions
-    if mode is "Event":
-        # fetch weather data on start and recurring (default: 10 minutes)
-        if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
-            weather = get_weather(weather_data)
-            if weather:
-                last_weather_check = time.monotonic()
-            # update weather display component
-            display_manager.update_weather(weather_data)
-
-        # calculate time until departure
-        departure_countdown = minutes_until_departure(next_event['departure_time'])
-        if departure_countdown >=1:
-            #test printing TODO remove
-            departure_time = convert_epoch_to_struct(next_event['departure_time'])
-            print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
-            current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min, departure_countdown)
-            )
-            # update display with headsign/station and time to departure
-            display_manager.update_event(departure_countdown, next_event['departure_train'])
+        # Increment loop and sleep
+        # Day mode: 10 seconds
+        # Event mode: 50 seconds
+        # Night mode: 5 minutes
+        # TODO make Night mode smarter to reduce API calls during off-hours
+        loop_counter += 1
+        if mode == "Day":
+            time.sleep(10)
+        elif mode == "Event":
+            time.sleep(50)
         else:
-            next_event = {}
-            mode="Day"
+            # Calculate the time until the next start_time
+            if current_time.tm_hour < start_time:
+                # If current_hour is before the start_time, sleep until start_time
+                time_to_sleep = (start_time - current_time.tm_hour) * (60 * 60)
+            else:
+                # If current_hour is after the end_time, sleep until start_time of the next day
+                time_to_sleep = (24 - current_time.tm_hour + start_time) * (60 * 60)
 
-    # display top plane data every 40 loops
-    # TODO find closest plane and display when within a certain distance
-    if loop_counter % 40 == 0 and len(planes) > 0:
-        try:
-            plane = planes.popitem()[1]
-            display_manager.scroll_text("Flight {}\n  Alt: {}".format(plane.flight, plane.alt_geom))
-        except Exception as e:
-            print(f"Plane Notification Error: {e}")
+            time.sleep(time_to_sleep)
 
-    # refresh display
-    display_manager.refresh_display()
-    # run garbage collection
-    gc.collect()
-    # print available memory
-    print("Loop {} | {} Mode | Available memory: {} bytes".format(loop_counter, mode, gc.mem_free()))
 
-    # if any checks haven't run in a long time, restart the Matrix Portal
-    # weather check: 60 minutes
-    # train check: 10 minutes
-    if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 600) and (last_time_check is None or time.monotonic() - last_time_check >= 3600)):
-        print("Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(last_weather_check, last_train_check))
-        time.sleep(5)
-        supervisor.reload()
-
-    # Increment loop and sleep
-    # Day mode: 10 seconds
-    # Event mode: 50 seconds
-    # Night mode: 5 minutes
-    # TODO make Night mode smarter to reduce API calls during off-hours
-    loop_counter+=1
-    if mode == "Day":
-        time.sleep(10)
-    elif mode == "Event":
-        time.sleep(50)
-    else:
-        time.sleep(300)
+if __name__ == "__main__":
+    main()
