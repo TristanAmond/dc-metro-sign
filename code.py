@@ -2,7 +2,7 @@ import board
 import gc
 import time
 import busio
-from digitalio import DigitalInOut, Pull
+from digitalio import DigitalInOut
 import neopixel
 import supervisor
 
@@ -10,7 +10,6 @@ from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_esp32spi import adafruit_esp32spi_wifimanager
 
-import json
 import display_manager
 
 print("All imports loaded | Available memory: {} bytes".format(gc.mem_free()))
@@ -23,12 +22,12 @@ except ImportError:
     print("Wifi + constants are kept in secrets.py, please add them there!")
     raise
 
-# Local Metro station
+# Stores train data
 station_code = secrets["station_code"]
 historical_trains = [None, None]
 
-# Stores recent Plane data to avoid repetition
-historical_planes = {}
+# Stores nearest plane data
+nearest_plane = None
 
 # Stores next event data
 next_event = None
@@ -55,6 +54,9 @@ current_time_epoch = None
 start_time = 6
 end_time = 21
 
+# Notification queue
+notification_queue = []
+
 # --- DISPLAY SETUP ---
 
 # MATRIX DISPLAY MANAGER
@@ -74,7 +76,7 @@ spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 # Initialize neopixel status light
 status_light = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.2)
-# Initialize wifi object
+# Initialize Wi-Fi object
 wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, status_light, attempts=5)
 # wifi.connect()
 
@@ -93,119 +95,135 @@ class Train:
 
 
 class Plane:
-    def __init__(self, flight, alt_geom, lat, lon):
+    def __init__(self, flight, altitude, distance, emergency=None):
         self.flight = flight
-        self.alt_geom = alt_geom
-        self.lat = lat
-        self.lon = lon
-        self.location = (lat, lon)
-        self.emergency = None
-
-    def get_location(self):
-        return self.location
+        self.altitude = altitude
+        self.distance = distance
+        self.emergency = emergency
 
 
 # --- TRANSIT API CALLS ---
 
 # queries WMATA API to return an array of two Train objects
 # input is StationCode from secrets.py, and a historical_trains array
-def get_trains(StationCode, historical_trains):
+def get_trains(station_code, historical_trains):
+    json_data = None
+    a_train = None
+    b_train = None
+
     try:
         # query WMATA API with input StationCode
         URL = 'https://api.wmata.com/StationPrediction.svc/json/GetPrediction/'
         payload = {'api_key': secrets['wmata api key']}
-        response = wifi.get(URL + StationCode, headers=payload)
+        response = wifi.get(URL + station_code, headers=payload)
         json_data = response.json()
         del response
     except Exception as e:
         print("Failed to get WMATA data, retrying\n", e)
         wifi.reset()
 
-    # set up two train directions (A station code and B station code)
-    A_train = None
-    B_train = None
-    # check trains in json response for correct destination code prefixes
-    try:
-        for item in json_data['Trains']:
-            if item['Line'] is not "RD":
-                pass
-            # if no train and destination code prefix matches, add
-            if item['DestinationCode'][0] is "A" and A_train is None:
-                A_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'], item['Min'])
-            elif item['DestinationCode'][0] is "B" and B_train is None:
-                B_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'], item['Min'])
-            # if both trains have a train object, pass
-            else:
-                pass
+    if json_data is not None:
+        # Set up two train directions (A station code and B station code)
+        try:
+            for item in json_data['Trains']:
+                if item['Line'] is not "RD":
+                    pass
+                # Handles A direction trains
+                if item['DestinationCode'][0] == "A":
+                    # If a train has not been assigned, create new Train object and assign
+                    if a_train is None:
+                        a_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
+                                        item['Min'])
+                    else:
+                        pass
+                # Handles B direction trains
+                elif item['DestinationCode'][0] == "B":
+                    # # If b train has not been assigned, create new Train object and assign
+                    if b_train is None:
+                        b_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
+                                        item['Min'])
+                    else:
+                        pass
+                # For neither A nor B direction trains, pass
+                else:
+                    pass
 
-    except Exception as e:
-        print("Error accessing the WMATA API: ", e)
+        except Exception as e:
+            print("Error accessing the WMATA API: ", e)
+            pass
+    else:
+        print("Failed to get response from WMATA API")
         pass
 
-    # merge train objects into trains array
-    # NOTE: None objects accepted, handled by update_trains function in display_manager.py
-    trains = [A_train, B_train]
-    # if train objects exist in trains array, add them to historical trains
-    if A_train is not None:
-        historical_trains[0] = A_train
-    if B_train is not None:
-        historical_trains[1] = B_train
-    # print train data
+    # If new a train is found, replace historical a train
+    if a_train is not None:
+        historical_trains[0] = a_train
+    elif a_train is None and historical_trains[0] is not None:
+        a_train = historical_trains[0]
+    # If new b train is found, replace historical b train
+    if b_train is not None:
+        historical_trains[1] = b_train
+    elif b_train is None and historical_trains[1] is not None:
+        b_train = historical_trains[1]
+
+    # Print trains
+    trains = [a_train, b_train]
     try:
         for item in trains:
-            print("{} {}: {}".format(item.destination_code, item.destination_name, item.minutes))
-    except:
+            print("{}: {}".format(item.destination_name, item.minutes))
+    except Exception as e:
+        print(e)
         pass
     return trains
 
 
-# queries local ADS-B reciever with readsb installed for flight data
-# adds unseen flights to the plane array
-# input is plane array
-def get_planes(historical_planes):
-    # set local variables
-    plane_counter = 0
-    planes = {}
+# --- PLANE API CALLS ---
+def get_nearest_plane():
+    global nearest_plane
+    json_data = None
     # request plane.json from local ADS-B receiver (default location for readsb)
     # sample format: http://XXX.XXX.X.XXX/tar1090/data/aircraft.json
     try:
         response = wifi.get(secrets['plane_data_json_url'])
-        json_dump = response.json()
+        json_data = response.json()
     except OSError as e:
         print("Failed to get PLANE data, retrying\n", e)
         wifi.reset()
     except RuntimeError as e:
         print("Failed to get PLANE data, retrying\n", e)
         wifi.reset()
-    except:
-        return historical_planes
+    except Exception as e:
+        print("Failed to get PLANE data", e)
+        pass
     gc.collect()
 
-    try:
-        # iterate through each aircraft entry
-        for entry in json_dump["aircraft"]:
-            # if flight callsign exists
-            if "flight" in entry:
-                try:
-                    new_plane = Plane(entry["flight"].strip(), entry["alt_geom"], entry["lat"], entry["lon"])
-                    # seperate emergency field as optional
-                    if "emergency" in entry:
-                        new_plane.emergency = entry["emergency"]
-                    # add to planes dict and increment counter
-                    planes[new_plane.flight] = new_plane
-                    # add to historical plane dict if not already there
-                    if entry["flight"].strip() not in historical_planes:
-                        historical_planes[new_plane.flight] = new_plane
-                        plane_counter += 1
-                except:
-                    print("couldn't add plane?")
-        print("found {} new planes | {} total planes".format(plane_counter, len(historical_planes)))
-        if plane_counter >= 1 and len(historical_planes) >= 5:
-            historical_planes = planes
-        return planes
-    except Exception as e:
-        print(e)
-        return historical_planes
+    # If aircraft data exists
+    if json_data is not None and json_data["aircraft"] is not None:
+        try:
+            # iterate through each aircraft entry
+            for entry in json_data["aircraft"]:
+                # Check if flight callsign and distance exists
+                if "flight" and "alt_geom" and "r_dst" in entry:
+                    entry_distance = round(int(entry["r_dst"]), 2)
+                    if nearest_plane is None or (
+                            nearest_plane is not None and int(nearest_plane.distance) > entry_distance):
+                        try:
+                            nearest_plane = Plane(
+                                entry["flight"].strip(),
+                                entry["alt_geom"],
+                                str(entry_distance)
+                            )
+                            print("Nearest plane: {} | {} | {}".format(nearest_plane.flight, nearest_plane.altitude,
+                                                                       nearest_plane.distance))
+                            # separate emergency field as optional
+                            if "emergency" in entry:
+                                nearest_plane.emergency = entry["emergency"]
+                        except Exception as e:
+                            print(f"couldn't update nearest plane entry: {e}")
+        except Exception as e:
+            print(e)
+    else:
+        print("Failed to get PLANE data")
 
 
 # --- WEATHER API CALLS ---
@@ -315,19 +333,14 @@ def get_next_event():
 
 # switches mode to event if calculated departure is within 60 minutes
 def event_mode_switch(departure_time, diff=60):
-    global mode
     departure_diff = minutes_until_departure(departure_time)
 
-    # if departure time is beyond, do nothing
-    if departure_diff > diff:
-        print(f"{departure_diff} minutes until departure")
-        pass
     # if departure time is within timeframe, switch mode to event
-    elif 0 < departure_diff < diff:
-        mode = "Event"
+    if 0 < departure_diff < diff:
+        return "Event"
     # if departure time is 0 or less than 0, reset mode
     else:
-        mode = "Day"
+        return "Day"
 
 
 # --- HEADLINE FUNCTIONS ---
@@ -449,18 +462,31 @@ def send_notification(text):
     display_manager.scroll_text(text)
 
 
+def is_valid_integer(string):
+    try:
+        int(string)
+        return True
+    except ValueError:
+        return False
+
+
 # --- OPERATING LOOP ------------------------------------------
 def main():
+    global current_time
+    global next_event
+    global nearest_plane
+    global historical_trains
     loop_counter = 1
     last_weather_check = None
     last_train_check = None
     last_plane_check = None
     last_event_check = None
     last_headline_check = None
-    global mode
     mode = "Day"
 
     # TODO switch counters to loop modulos to save memory
+
+    # TODO add notification queue and handler
 
     while True:
         # update current time struct and epoch
@@ -482,7 +508,7 @@ def main():
             pass
         gc.collect()
 
-        # run day mode actions
+        # --- DAY MODE
         if mode is "Day":
             # fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
@@ -507,41 +533,52 @@ def main():
             # update plane data (default: 5 minutes)
             if last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5:
                 try:
-                    planes = get_planes(historical_planes)
+                    get_nearest_plane()
+                    last_plane_check = time.monotonic()
                 except Exception as e:
                     print(f"Plane error: {e}")
-                last_plane_check = time.monotonic()
+                # Push nearest plane to notification queue (default: 12 minutes)
+                if nearest_plane is not None and current_time.tm_min % 12 == 0:
+                    nearest_plane_string = (
+                            f"Flight: {nearest_plane.flight}\nAlt: {nearest_plane.altitude}" +
+                            f" | Dist: {nearest_plane.distance}"
+                    )
+                    notification_queue.append(nearest_plane_string)
 
             # update event data (default: 5 minutes)
             if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
                 try:
                     # check for event departure
-                    global next_event
                     next_event = get_next_event()
+                    last_event_check = time.monotonic()
                     if next_event is not None:
                         # switch to event mode if time is within an hour
-                        event_mode_switch(next_event['departure_time'])
+                        mode = event_mode_switch(next_event['departure_time'])
                         pass
                     else:
                         print("no event found.")
                 except Exception as e:
                     print(f"Event error: {e}")
-                last_event_check = time.monotonic()
 
-            # update top headline (default: 1 minute)
+            # Update top headline (default: 1 minute)
+            # Delay check on cold start by 2 loops
             if loop_counter >= 2 and (last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1):
                 global current_headline
+                # Check for a new headline
                 try:
                     headline = get_headline()
                 except Exception as e:
                     print(f"Headline error: {e}")
                     headline = None
 
+                # If a new headline exists, push it to the notification queue
                 if headline is not None:
                     try:
-                        headline_string = f"{current_headline['publishedTime']} | {current_headline['source']}\n{current_headline['title']}"
-                        print("pushing headline: {}".format(current_headline['title']))
-                        send_notification(headline_string)
+                        headline_string = (
+                                f"{current_headline['publishedTime']} | {current_headline['source']}\n" +
+                                f"{current_headline['title']}"
+                        )
+                        notification_queue.append(headline_string)
                     except Exception as e:
                         print(f"Headline error: {e}")
                 # No / No new headline
@@ -551,11 +588,11 @@ def main():
             else:
                 pass
 
-            # send a scrolling notification on the hour (DEMO)
+            # Push current time to the top of the notification queue at the top of the hour
             if current_time.tm_min == 0 and current_time.tm_sec < 15:
-                send_notification("Time is {}:0{}".format(current_time.tm_hour, current_time.tm_min))
+                notification_queue.insert(0, "Time is {}:0{}".format(current_time.tm_hour, current_time.tm_min))
 
-        # run event mode actions
+        # --- EVENT MODE ---
         if mode is "Event":
             # fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
@@ -566,43 +603,51 @@ def main():
                 display_manager.update_weather(weather_data)
 
             # calculate time until departure
-            departure_countdown = minutes_until_departure(next_event['departure_time'])
-            if departure_countdown >= 1:
-                # test printing TODO remove
-                departure_time = convert_epoch_to_struct(next_event['departure_time'])
-                print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
-                    current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min,
-                    departure_countdown)
-                )
-                # update display with headsign/station and time to departure
-                display_manager.update_event(departure_countdown, next_event['departure_train'])
+            if next_event is not None:
+                departure_countdown = minutes_until_departure(next_event['departure_time'])
+                if departure_countdown >= 1:
+                    # test printing TODO remove
+                    departure_time = convert_epoch_to_struct(next_event['departure_time'])
+                    print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
+                        current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min,
+                        departure_countdown)
+                    )
+                    # update display with headsign/station and time to departure
+                    display_manager.update_event(departure_countdown, next_event['departure_train'])
+                # If departure time has passed, switch back to day mode
+                else:
+                    next_event = None
+                    mode = "Day"
+            # If next_event is None, switch back to day mode
             else:
-                next_event = {}
                 mode = "Day"
 
-        # display top plane data every 40 loops
-        # TODO find closest plane and display when within a certain distance
-        if loop_counter % 40 == 0 and len(planes) > 0:
+        # NOTIFICATION QUEUE HANDLER
+        if len(notification_queue) > 0:
+            print(f"Notification Queue:\n{notification_queue}")
             try:
-                plane = planes.popitem()[1]
-                display_manager.scroll_text("Flight {}\n  Alt: {}".format(plane.flight, plane.alt_geom))
+                send_notification(notification_queue.pop(0))
             except Exception as e:
-                print(f"Plane Notification Error: {e}")
+                print(f"Notification Error: {e}")
 
         # refresh display
         display_manager.refresh_display()
         # run garbage collection
         gc.collect()
         # print available memory
-        print("Loop {} | {} Mode | Available memory: {} bytes".format(loop_counter, mode, gc.mem_free()))
+        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
 
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
         # train check: 10 minutes
         if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 600) and (
                 last_time_check is None or time.monotonic() - last_time_check >= 3600)):
-            print("Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(last_weather_check,
-                                                                                               last_train_check))
+            print(
+                "Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(
+                    last_weather_check,
+                    last_train_check
+                )
+            )
             time.sleep(5)
             supervisor.reload()
 
