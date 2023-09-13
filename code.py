@@ -486,8 +486,6 @@ def main():
 
     # TODO switch counters to loop modulos to save memory
 
-    # TODO add notification queue and handler
-
     while True:
         # update current time struct and epoch
         check_time()
@@ -654,8 +652,6 @@ def main():
         # Increment loop and sleep
         # Day mode: 10 seconds
         # Event mode: 50 seconds
-        # Night mode: 5 minutes
-        # TODO make Night mode smarter to reduce API calls during off-hours
         loop_counter += 1
         if mode == "Day":
             time.sleep(10)
