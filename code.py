@@ -93,6 +93,18 @@ class Train:
         self.destination_code = destination_code
         self.minutes = minutes
 
+    def __getitem__(self, key):
+        if key == 'destination':
+            return self.destination
+        elif key == 'destination_name':
+            return self.destination_name
+        elif key == 'destination_code':
+            return self.destination_code
+        elif key == 'minutes':
+            return self.minutes
+        else:
+            raise KeyError(f"Invalid key: {key}")
+
 
 class Plane:
     def __init__(self, flight, altitude, distance, emergency=None):
@@ -100,6 +112,45 @@ class Plane:
         self.altitude = altitude
         self.distance = distance
         self.emergency = emergency
+
+    def __getitem__(self, key):
+        if key == 'flight':
+            return self.flight
+        elif key == 'altitude':
+            return self.altitude
+        elif key == 'distance':
+            return self.distance
+        elif key == 'emergency':
+            return self.emergency
+        else:
+            raise KeyError(f"Invalid key: {key}")
+
+    def get_plane_string(self):
+        return (f"Flight: {self.flight}\nAlt: {add_commas_to_number(str(self.altitude))}ft" +
+                f" | Dist: {self.distance}nmi")
+
+
+class Article:
+    def __init__(self, source, publishedTime, publishedAt, title):
+        self.source = source
+        self.publishedTime = publishedTime
+        self.publishedAt = publishedAt
+        self.title = title
+
+    def __getitem__(self, key):
+        if key == 'source':
+            return self.source
+        elif key == 'publishedTime':
+            return self.publishedTime
+        elif key == 'publishedAt':
+            return self.publishedAt
+        elif key == 'title':
+            return self.title
+        else:
+            raise KeyError(f"Invalid key: {key}")
+
+    def get_headline_string(self):
+        return f"{self.publishedTime} | {self.source}\n{self.title}"
 
 
 # --- TRANSIT API CALLS ---
@@ -178,7 +229,7 @@ def get_trains(station_code, historical_trains):
 
 
 # --- PLANE API CALLS ---
-def get_nearest_plane():
+def get_nearest_plane(range=2.0):
     global nearest_plane
     json_data = None
     # request plane.json from local ADS-B receiver (default location for readsb)
@@ -202,26 +253,28 @@ def get_nearest_plane():
         try:
             # iterate through each aircraft entry
             for entry in json_data["aircraft"]:
-                # Check if flight callsign and distance exists
-                if "flight" and "alt_geom" and "r_dst" in entry:
-                    entry_distance = round(int(entry["r_dst"]), 2)
+                # Check if flight callsign and distance exists, check distance against range preset
+                if "flight" and "alt_geom" and "r_dst" in entry and float(entry["r_dst"]) <= range:
+                    entry_distance = round(float(entry["r_dst"]), 2)
                     if nearest_plane is None or (
-                            nearest_plane is not None and int(nearest_plane.distance) > entry_distance):
+                            nearest_plane is not None and nearest_plane.distance > entry_distance):
                         try:
                             nearest_plane = Plane(
                                 entry["flight"].strip(),
                                 entry["alt_geom"],
-                                str(entry_distance)
+                                float(entry_distance)
                             )
-                            print("Nearest plane: {} | {} | {}".format(nearest_plane.flight, nearest_plane.altitude,
-                                                                       nearest_plane.distance))
+                            print(nearest_plane.get_plane_string())
                             # separate emergency field as optional
                             if "emergency" in entry:
                                 nearest_plane.emergency = entry["emergency"]
                         except Exception as e:
                             print(f"couldn't update nearest plane entry: {e}")
+                else:
+                    print("Plane data didn't meet object criteria")
+                    pass
         except Exception as e:
-            print(e)
+            print("Failed to create PLANE object:", e)
     else:
         print("Failed to get PLANE data")
 
@@ -333,7 +386,7 @@ def get_next_event():
 
 # switches mode to event if calculated departure is within 60 minutes
 def event_mode_switch(departure_time, diff=60):
-    departure_diff = minutes_until_departure(departure_time)
+    departure_diff = epoch_diff(departure_time)
 
     # if departure time is within timeframe, switch mode to event
     if 0 < departure_diff < diff:
@@ -344,8 +397,8 @@ def event_mode_switch(departure_time, diff=60):
 
 
 # --- HEADLINE FUNCTIONS ---
-
-def get_headline():
+# TODO localize this call?
+def get_headline(recent_only=False):
     global current_headline
     try:
         response = wifi.get(secrets['headline_json_url'])
@@ -355,20 +408,37 @@ def get_headline():
         print("Failed to get HEADLINE data: {}".format(e))
         return None
     if json_data is not None:
-        new_headline = {}
         try:
-            new_headline['source'] = json_data['source']
-            new_headline['publishedTime'] = json_data['publishedTime']
-            new_headline['title'] = json_data['title']
+            new_headline = Article(
+                json_data['source'],
+                json_data['publishedTime'],
+                json_data['publishedAt'],
+                json_data['title']
+            )
         except Exception as e:
             print("Failed to create HEADLINE object: {}".format(e))
             return None
-        # Check to see if the headline has changed
-        if current_headline is not None and current_headline['title'] == new_headline['title']:
-            return None
 
-        current_headline = new_headline
-        return current_headline
+        # Check to see if the headline has changed
+        if recent_only is False and current_headline is not None and current_headline['title'] == new_headline['title']:
+            return None
+        # Check to see if the headline is more than 60 minutes old
+        # TODO get this to actually work properly haha
+        elif recent_only is True:
+            new_headline_epoch = convert_iso8601_to_seconds(new_headline['publishedAt'])
+            print(f"Headline epoch: {new_headline_epoch}")
+            new_headline_age = epoch_diff(new_headline_epoch)
+            print(f"Headline age: {new_headline_age}")
+            if new_headline_age > 60:
+                print(f"{new_headline['title']} is {new_headline_age} minutes old, skipping")
+                return None
+            else:
+                current_headline = new_headline
+                return current_headline
+
+        else:
+            current_headline = new_headline
+            return current_headline
     else:
         print("Failed to get HEADLINE data: json_data is None")
         return None
@@ -420,13 +490,36 @@ def parse_iso_time(iso_time):
     return time_struct
 
 
+def convert_struct_to_epoch(struct_time):
+    date, t = struct_time.split("T")
+    year, month, day = map(int, date.split("-"))
+    hour, minute, second = map(int, t.split("-")[0].split(":"))
+
+    t = time.struct_time((year, month, day, hour, minute, second, -1, -1, -1))
+    epoch_time = time.mktime(t)
+    return epoch_time
+
+
+def convert_iso8601_to_seconds(timestamp):
+    # Split the timestamp into date and time components
+    date_str, time_str = timestamp.split('T')
+    # Parse the year, month, and day from the date component
+    year, month, day = map(int, date_str.split('-'))
+    # Parse the hour, minute, and second from the time component
+    hour, minute, second = map(int, time_str.split(':'))
+    # Calculate the total seconds since the epoch
+    seconds = (year - 1970) * 31536000 + month * 2592000 + day * 86400 + hour * 3600 + minute * 60 + second
+
+    return seconds
+
+
 # Calculates difference between two epoch times
 # Input is a departure time in epoch time
 # Output is difference between departure and last current time in minutes
-def minutes_until_departure(departure_time):
+def epoch_diff(epoch_time):
     global current_time_epoch
     if current_time_epoch is not None:
-        difference = departure_time - current_time_epoch
+        difference = epoch_time - current_time_epoch
         return round(difference / 60)
     else:
         return None
@@ -461,6 +554,14 @@ def is_valid_integer(string):
         return True
     except ValueError:
         return False
+
+
+def add_commas_to_number(number_str):
+    reversed_number = "".join(reversed(number_str))
+    groups = [reversed_number[i:i+3] for i in range(0, len(reversed_number), 3)]
+    formatted_number = ",".join("".join(reversed(group)) for group in reversed(groups))
+
+    return formatted_number
 
 
 # --- OPERATING LOOP ------------------------------------------
@@ -535,13 +636,10 @@ def main():
                     last_plane_check = time.monotonic()
                 except Exception as e:
                     print(f"Plane error: {e}")
-                # Push nearest plane to notification queue (default: 12 minutes)
-                if nearest_plane is not None and current_time.tm_min % 12 == 0:
-                    nearest_plane_string = (
-                            f"Flight: {nearest_plane.flight}\nAlt: {nearest_plane.altitude}" +
-                            f" | Dist: {nearest_plane.distance}"
-                    )
-                    notification_queue.append(nearest_plane_string)
+                # Push plane to notification queue if within 2 miles
+                if nearest_plane is not None:
+                    notification_queue.append(nearest_plane.get_plane_string())
+                    nearest_plane = None
 
             # update event data (default: 5 minutes)
             if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
@@ -559,26 +657,21 @@ def main():
                     print(f"Event error: {e}")
 
             # Update top headline (default: 1 minute)
-            # Delay check on cold start by 2 loops
-            if loop_counter >= 2 and (last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1):
+            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1:
                 global current_headline
                 # Check for a new headline
                 try:
                     headline = get_headline()
                 except Exception as e:
-                    print(f"Headline error: {e}")
+                    print(f"Headline retrieval error: {e}")
                     headline = None
 
                 # If a new headline exists, push it to the notification queue
                 if headline is not None:
                     try:
-                        headline_string = (
-                                f"{current_headline['publishedTime']} | {current_headline['source']}\n" +
-                                f"{current_headline['title']}"
-                        )
-                        notification_queue.append(headline_string)
+                        notification_queue.append(headline.get_headline_string())
                     except Exception as e:
-                        print(f"Headline error: {e}")
+                        print(f"Headline notification error: {e}")
                 # No / No new headline
                 else:
                     pass
@@ -602,7 +695,7 @@ def main():
 
             # calculate time until departure
             if next_event is not None:
-                departure_countdown = minutes_until_departure(next_event['departure_time'])
+                departure_countdown = epoch_diff(next_event['departure_time'])
                 if departure_countdown >= 1:
                     # test printing TODO remove
                     print("Current time: {}:{} | Departure countdown: {}".format(
@@ -619,7 +712,7 @@ def main():
                 mode = "Day"
 
         # NOTIFICATION QUEUE HANDLER
-        if len(notification_queue) > 0:
+        if loop_counter > 1 and len(notification_queue) > 0:
             print(f"Notification Queue:\n{notification_queue}")
             try:
                 send_notification(notification_queue.pop(0))
@@ -636,8 +729,8 @@ def main():
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
         # train check: 10 minutes
-        if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 600) and (
-                last_time_check is None or time.monotonic() - last_time_check >= 3600)):
+        if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 60 * 10) and (
+                last_time_check is None or time.monotonic() - last_time_check >= 60 * 60)):
             print(
                 "Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(
                     last_weather_check,
