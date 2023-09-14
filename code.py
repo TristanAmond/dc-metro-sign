@@ -376,55 +376,48 @@ def get_headline():
 
 # --- TIME MGMT FUNCTIONS ---
 
-def check_time():
-    base_url = "http://io.adafruit.com/api/v2/time/seconds"
+def get_current_time():
+    global current_time
+    global current_time_epoch
+
+    base_url = "http://io.adafruit.com/api/v2/time/"
     try:
-        response = wifi.get(base_url)
-        epoch_time = int(response.text)
+        response = wifi.get(base_url + "seconds")
+        current_time_epoch = int(response.text)
         del response
+    except Exception as e:
+        print(e)
+        wifi.reset()
 
-        global current_time
-        global current_time_epoch
-        current_time = convert_epoch_to_struct(epoch_time)
-        current_time_epoch = epoch_time
-
+    try:
+        response = wifi.get(base_url + "ISO-8601")
+        current_iso_time = response.text
+        current_time = parse_iso_time(current_iso_time)
+        del response
     except Exception as e:
         print(e)
         wifi.reset()
 
 
-def convert_epoch_to_struct(epoch_time):
-    # DST offset
-    # MUST UPDATE THIS FOR DAYLIGHT SAVING TIME CHANGE
-    is_dst = False
-    # Timezone offset
-    timezone_offset = -4
+def parse_iso_time(iso_time):
+    year = int(iso_time[0:4])
+    month = int(iso_time[5:7])
+    day = int(iso_time[8:10])
+    hours = int(iso_time[11:13])
+    minutes = int(iso_time[14:16])
+    seconds = int(iso_time[17:19])
 
-    # Convert the timezone offset from hours to seconds
-    timezone_offset_seconds = timezone_offset * 3600
+    # Adjust month and year for January and February
+    if month <= 2:
+        month += 12
+        year -= 1
 
-    # Apply the timezone offset
-    epoch_time += timezone_offset_seconds
+    # Calculate weekday using Zeller's Congruence algorithm
+    weekday = (day + 2 * month + 3 * (month + 1) // 5 + year + year // 4 - year // 100 + year // 400) % 7
+    time_tuple = (year, month, day, hours, minutes, seconds, weekday, -1, -1)
+    time_struct = time.struct_time(time_tuple)
 
-    # Adjust for DST
-    if is_dst:
-        epoch_time -= 3600
-
-    return time.localtime(epoch_time)
-
-
-def convert_struct_to_epoch(struct_time):
-    date, t = struct_time.split("T")
-
-    year, month, day = map(int, date.split("-"))
-
-    hour, minute, second = map(int, t.split("-")[0].split(":"))
-
-    t = time.struct_time((year, month, day, hour, minute, second, -1, -1, -1))
-
-    epoch_time = time.mktime(t)
-
-    return epoch_time
+    return time_struct
 
 
 # Calculates difference between two epoch times
@@ -473,6 +466,8 @@ def is_valid_integer(string):
 # --- OPERATING LOOP ------------------------------------------
 def main():
     global current_time
+    global start_time
+    global end_time
     global next_event
     global nearest_plane
     global historical_trains
@@ -488,8 +483,13 @@ def main():
 
     while True:
         # update current time struct and epoch
-        check_time()
+        get_current_time()
         last_time_check = time.monotonic()
+        if loop_counter == 1:
+            print(
+                f"Current Time: {current_time.tm_hour}:{current_time.tm_min} Wkd: {current_time.tm_wday}" +
+                f"| Epoch Time: {current_time_epoch}"
+            )
 
         # check if display should be in night mode
         try:
@@ -605,10 +605,8 @@ def main():
                 departure_countdown = minutes_until_departure(next_event['departure_time'])
                 if departure_countdown >= 1:
                     # test printing TODO remove
-                    departure_time = convert_epoch_to_struct(next_event['departure_time'])
-                    print("Current time: {}:{} | Departure time: {}:{} | Departure countdown: {}".format(
-                        current_time.tm_hour, current_time.tm_min, departure_time.tm_hour, departure_time.tm_min,
-                        departure_countdown)
+                    print("Current time: {}:{} | Departure countdown: {}".format(
+                        current_time.tm_hour, current_time.tm_min, departure_countdown)
                     )
                     # update display with headsign/station and time to departure
                     display_manager.update_event(departure_countdown, next_event['departure_train'])
