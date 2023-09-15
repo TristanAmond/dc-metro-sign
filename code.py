@@ -51,7 +51,7 @@ current_time = None
 current_time_epoch = None
 
 # Default operating hour start and end times
-start_time = 6
+start_time = 8
 end_time = 21
 
 # Notification queue
@@ -157,7 +157,8 @@ class Article:
 
 # queries WMATA API to return an array of two Train objects
 # input is StationCode from secrets.py, and a historical_trains array
-def get_trains(station_code, historical_trains):
+def get_trains(historical_trains):
+    global station_code
     json_data = None
     a_train = None
     b_train = None
@@ -588,7 +589,7 @@ def main():
         last_time_check = time.monotonic()
         if loop_counter == 1:
             print(
-                f"Current Time: {current_time.tm_hour}:{current_time.tm_min} Wkd: {current_time.tm_wday}" +
+                f"Current Time: {current_time.tm_hour:02}:{current_time.tm_min:02} Wkd: {current_time.tm_wday}" +
                 f"| Epoch Time: {current_time_epoch}"
             )
 
@@ -622,7 +623,7 @@ def main():
             # update train data (default: 15 seconds)
             if last_train_check is None or time.monotonic() > last_train_check + 15:
                 try:
-                    trains = get_trains(station_code, historical_trains)
+                    trains = get_trains(historical_trains)
                     # update train display component
                     display_manager.update_trains(trains, historical_trains)
                 except Exception as e:
@@ -680,8 +681,8 @@ def main():
                 pass
 
             # Push current time to the top of the notification queue at the top of the hour
-            if current_time.tm_min == 0 and current_time.tm_sec < 15:
-                notification_queue.insert(0, "Time is {}:0{}".format(current_time.tm_hour, current_time.tm_min))
+            if current_time.tm_min == 0:
+                notification_queue.insert(0, f"Time is {current_time.tm_hour:02}:{current_time.tm_min:02}")
 
         # --- EVENT MODE ---
         if mode is "Event":
@@ -729,8 +730,7 @@ def main():
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
         # train check: 10 minutes
-        if mode == "Day" and ((last_train_check is None or time.monotonic() - last_train_check >= 60 * 10) and (
-                last_time_check is None or time.monotonic() - last_time_check >= 60 * 60)):
+        if mode == "Day" and time.monotonic() - last_train_check >= 60 * 10 and time.monotonic() - last_time_check >= 60 * 60:
             print(
                 "Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(
                     last_weather_check,
@@ -748,16 +748,24 @@ def main():
             time.sleep(10)
         elif mode == "Event":
             time.sleep(50)
+        # Night mode
         else:
             # Calculate the time until the next start_time
-            if current_time.tm_hour < start_time:
-                # If current_hour is before the start_time, sleep until start_time
-                time_to_sleep = (start_time - current_time.tm_hour) * (60 * 60)
-            else:
-                # If current_hour is after the end_time, sleep until start_time of the next day
-                time_to_sleep = (24 - current_time.tm_hour + start_time) * (60 * 60)
+            current_minutes = current_time.tm_hour * 60 + current_time.tm_min
+            start_minutes = start_time * 60
 
-            time.sleep(time_to_sleep)
+            if current_minutes < start_minutes:
+                # If current time is before the start_time, sleep until start_time
+                time_to_sleep = start_minutes - current_minutes
+                print(
+                    f"Current time: {current_time.tm_hour:02}:{current_time.tm_min:02} | Start Time: {start_time}:00 | Sleeping for {time_to_sleep // 60:02}:{time_to_sleep % 60:02}")
+            else:
+                # If current time is after the end_time, sleep until start_time of the next day
+                time_to_sleep = (24 * 60) - current_minutes + start_minutes
+                print(
+                    f"Current time: {current_time.tm_hour:02}:{current_time.tm_min:02} | Start Time: {start_time}:00 | Sleeping for {time_to_sleep // 60:02}:{time_to_sleep % 60:02}")
+
+            time.sleep(time_to_sleep * 60)
 
 
 if __name__ == "__main__":

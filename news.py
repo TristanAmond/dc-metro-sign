@@ -151,8 +151,9 @@ def main(start_time=6, end_time=21, news_source="gnews"):
             else:
                 print("No headlines found")
 
-            # Sleep for 15 minutes
-            time.sleep(60 * 15)
+            # NOTE: Free GNews plan allows for up to 100 requests per day, change this if operating hours change
+            # Sleep for 12 minutes
+            time.sleep(60 * 12)
         else:
             # Calculate the time until the next start_time
             if current_hour < start_time:
