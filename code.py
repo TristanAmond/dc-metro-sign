@@ -1,5 +1,6 @@
 import board
 import gc
+import sys
 import time
 import busio
 from digitalio import DigitalInOut
@@ -159,151 +160,6 @@ class Article:
         return f"{self.publishedTime} | {self.source}\n{self.title}"
 
 
-# --- TRANSIT API CALLS ---
-
-# queries WMATA API to return an array of two Train objects
-# input is station code from secrets.py, and a historical_trains array
-def get_trains():
-    """
-    Retrieves train data from the WMATA API based on the input station code.
-
-    This function queries the WMATA API using the provided station code and retrieves train prediction data for the specified station. It sets up two train directions: A and B, and assigns train objects to these directions based on the prediction data. It then updates the historical trains with the new train objects if they are found. Finally, it prints the destination name and minutes for each train, and returns a list of the train objects.
-
-    Returns:
-        List[Train]: A list of train objects representing the predicted train data.
-    """
-    global station_code
-    global historical_trains
-    json_data = None
-    a_train = None
-    b_train = None
-
-    try:
-        # query WMATA API with input StationCode
-        URL = 'https://api.wmata.com/StationPrediction.svc/json/GetPrediction/'
-        payload = {'api_key': secrets['wmata api key']}
-        response = wifi.get(URL + station_code, headers=payload)
-        json_data = response.json()
-        del response
-    except Exception as e:
-        print("Failed to get WMATA data, retrying\n", e)
-        wifi.reset()
-
-    if json_data is not None:
-        # Set up two train directions (A station code and B station code)
-        try:
-            for item in json_data['Trains']:
-                if item['Line'] is not "RD":
-                    pass
-                # Handles A direction trains
-                if item['DestinationCode'][0] == "A":
-                    # If a train has not been assigned, create new Train object and assign
-                    if a_train is None:
-                        a_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
-                                        item['Min'])
-                    else:
-                        pass
-                # Handles B direction trains
-                elif item['DestinationCode'][0] == "B":
-                    # # If b train has not been assigned, create new Train object and assign
-                    if b_train is None:
-                        b_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
-                                        item['Min'])
-                    else:
-                        pass
-                # For neither A nor B direction trains, pass
-                else:
-                    pass
-
-        except Exception as e:
-            print("Error accessing the WMATA API: ", e)
-            pass
-    else:
-        print("Failed to get response from WMATA API")
-        pass
-
-    # If new a train is found, replace historical a train
-    if a_train is not None:
-        historical_trains[0] = a_train
-    elif a_train is None and historical_trains[0] is not None:
-        a_train = historical_trains[0]
-    # If new b train is found, replace historical b train
-    if b_train is not None:
-        historical_trains[1] = b_train
-    elif b_train is None and historical_trains[1] is not None:
-        b_train = historical_trains[1]
-
-    # Print trains
-    trains = [a_train, b_train]
-    try:
-        for item in trains:
-            print("{}: {}".format(item.destination_name, item.minutes))
-    except Exception as e:
-        print(e)
-        pass
-    return trains
-
-
-# --- PLANE API CALLS ---
-def get_nearest_plane(range=2.0):
-    """
-    Retrieves the nearest plane within a given range.
-
-    Args:
-        range (float, optional): The range within which to search for planes. Defaults to 2.0.
-
-    Returns:
-        None
-    """
-    global nearest_plane
-    json_data = None
-    # request plane.json from local ADS-B receiver (default location for readsb)
-    # sample format: http://XXX.XXX.X.XXX/tar1090/data/aircraft.json
-    try:
-        response = wifi.get(secrets['plane data json url'])
-        json_data = response.json()
-    except OSError as e:
-        print("Failed to get PLANE data, retrying\n", e)
-        wifi.reset()
-    except RuntimeError as e:
-        print("Failed to get PLANE data, retrying\n", e)
-        wifi.reset()
-    except Exception as e:
-        print("Failed to get PLANE data", e)
-        pass
-    gc.collect()
-
-    # If aircraft data exists
-    if json_data is not None and json_data["aircraft"] is not None:
-        try:
-            # iterate through each aircraft entry
-            for entry in json_data["aircraft"]:
-                # Check if flight callsign and distance exists, check distance against range preset
-                if "flight" and "alt_geom" and "r_dst" in entry and float(entry["r_dst"]) <= range:
-                    entry_distance = round(float(entry["r_dst"]), 2)
-                    if nearest_plane is None or (
-                            nearest_plane is not None and nearest_plane.distance > entry_distance):
-                        try:
-                            nearest_plane = Plane(
-                                entry["flight"].strip(),
-                                entry["alt_geom"],
-                                float(entry_distance)
-                            )
-                            print(nearest_plane.get_plane_string())
-                            # separate emergency field as optional
-                            if "emergency" in entry:
-                                nearest_plane.emergency = entry["emergency"]
-                        except Exception as e:
-                            print(f"couldn't update nearest plane entry: {e}")
-                else:
-                    print("Plane data didn't meet object criteria")
-                    pass
-        except Exception as e:
-            print("Failed to create PLANE object:", e)
-    else:
-        print("Failed to get PLANE data")
-
-
 # --- WEATHER API CALLS ---
 
 # queries Openweather API to return a dict with current and 3 hr forecast weather data
@@ -393,6 +249,150 @@ def get_weather():
         wifi.reset()
 
 
+# --- METRO API CALLS ---
+
+# queries WMATA API to return an array of two Train objects
+# input is station code from secrets.py, and a historical_trains array
+def get_trains():
+    """
+    Retrieves train data from the WMATA API based on the input station code.
+
+    This function queries the WMATA API using the provided station code and retrieves train prediction data for the specified station. It sets up two train directions: A and B, and assigns train objects to these directions based on the prediction data. It then updates the historical trains with the new train objects if they are found. Finally, it prints the destination name and minutes for each train, and returns a list of the train objects.
+
+    Returns:
+        List[Train]: A list of train objects representing the predicted train data.
+    """
+    global station_code
+    global historical_trains
+    json_data = None
+    a_train = None
+    b_train = None
+
+    try:
+        # query WMATA API with input StationCode
+        URL = 'https://api.wmata.com/StationPrediction.svc/json/GetPrediction/'
+        payload = {'api_key': secrets['wmata api key']}
+        response = wifi.get(URL + station_code, headers=payload)
+        json_data = response.json()
+        del response
+    except Exception as e:
+        print("Failed to get WMATA data, retrying\n", e)
+        wifi.reset()
+
+    if json_data is not None:
+        # Set up two train directions (A station code and B station code)
+        try:
+            for item in json_data['Trains']:
+                if item['Line'] is not "RD":
+                    pass
+                # Handles A direction trains
+                if item['DestinationCode'][0] == "A":
+                    # If a train has not been assigned, create new Train object and assign
+                    if a_train is None:
+                        a_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
+                                        item['Min'])
+                    else:
+                        pass
+                # Handles B direction trains
+                elif item['DestinationCode'][0] == "B":
+                    # # If b train has not been assigned, create new Train object and assign
+                    if b_train is None:
+                        b_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
+                                        item['Min'])
+                    else:
+                        pass
+                # For neither A nor B direction trains, pass
+                else:
+                    pass
+
+        except Exception as e:
+            print("Error accessing the WMATA API: ", e)
+            pass
+    else:
+        print("Failed to get response from WMATA API")
+        pass
+
+    # If new a train is found, replace historical a train
+    if a_train is not None:
+        historical_trains[0] = a_train
+    elif a_train is None and historical_trains[0] is not None:
+        a_train = historical_trains[0]
+    # If new b train is found, replace historical b train
+    if b_train is not None:
+        historical_trains[1] = b_train
+    elif b_train is None and historical_trains[1] is not None:
+        b_train = historical_trains[1]
+
+    trains = [a_train, b_train]
+    '''try:
+        for item in trains:
+            print("{}: {}".format(item.destination_name, item.minutes))
+    except Exception as e:
+        print(e)
+        pass'''
+    return trains
+
+
+# --- PLANE API CALLS ---
+def get_nearest_plane(range=2.0):
+    """
+    Retrieves the nearest plane within a given range by requesting plane.json from local ADS-B receiver (default
+    location for readsb)
+    Sample format: http://XXX.XXX.X.XXX/tar1090/data/aircraft.json
+
+    Args:
+        range (float, optional): The range within which to search for planes. Defaults to 2.0.
+
+    Returns:
+        None
+    """
+    global nearest_plane
+    json_data = None
+
+    try:
+        response = wifi.get(secrets['plane data json url'])
+        json_data = response.json()
+    except OSError as e:
+        print("Failed to get PLANE data, retrying\n", e)
+        wifi.reset()
+    except RuntimeError as e:
+        print("Failed to get PLANE data, retrying\n", e)
+        wifi.reset()
+    except Exception as e:
+        print("Failed to get PLANE data", e)
+        pass
+    gc.collect()
+
+    # If aircraft data exists
+    if json_data is not None and json_data["aircraft"] is not None:
+        try:
+            for entry in json_data["aircraft"]:
+                # Check if flight callsign and distance exists, check distance against range
+                if "flight" and "alt_geom" and "r_dst" in entry and float(entry["r_dst"]) <= range:
+                    entry_distance = round(float(entry["r_dst"]), 2)
+                    if nearest_plane is None or (
+                            nearest_plane is not None and nearest_plane.distance > entry_distance):
+                        try:
+                            nearest_plane = Plane(
+                                entry["flight"].strip(),
+                                entry["alt_geom"],
+                                float(entry_distance)
+                            )
+                            print(nearest_plane.get_plane_string())
+                            # Separate emergency field as optional
+                            if "emergency" in entry:
+                                nearest_plane.emergency = entry["emergency"]
+                        except Exception as e:
+                            print(f"couldn't update nearest plane entry: {e}")
+                else:
+                    print("Plane data didn't meet object criteria")
+                    pass
+        except Exception as e:
+            print("Failed to create PLANE object:", e)
+    else:
+        print("Failed to get PLANE data")
+
+
 # --- EVENT API CALLS ---
 def get_next_event():
     """
@@ -451,21 +451,18 @@ def event_mode_switch(departure_time, diff=60):
 
 
 # --- HEADLINE FUNCTIONS ---
-def get_headline(recent_only=True, news_source="gnews", article_count=1):
+def get_headline(recent_only=True, recent_within=90, news_source="gnews", article_count=1):
     """
-    Retrieves the latest headline from a specified news source.
+    Generates a headline from a specified news source.
 
     Args:
-        recent_only (bool, optional): Specifies whether to retrieve only recent headlines. Defaults to True.
-        news_source (str, optional): The news source to retrieve headlines from. Can be 'gnews', 'newsapi', or 'sample_data'. Defaults to "gnews".
-        article_count (int, optional): The number of headlines to retrieve. Defaults to 1.
+        recent_only (bool, optional): Flag indicating if only recent headlines should be returned. Defaults to True.
+        recent_within (int, optional): The time window (in minutes) within which a headline is considered recent. Defaults to 90.
+        news_source (str, optional): The source of the news. Can be 'gnews', 'newsapi', or 'sample_data'. Defaults to "gnews".
+        article_count (int, optional): The number of articles to retrieve. Defaults to 1.
 
     Returns:
-        Article or None: The latest headline as an Article object if recent_only is False and there are headlines available. None if recent_only is True and the latest headline is more than 60 minutes old, or if recent_only is False and the latest headline is the same as the current headline, or if no headlines are found.
-
-    Raises:
-        Exception: If there is an error retrieving the news data from the API.
-
+        Article or None: The generated headline as an Article object, or None if no headline is available.
     """
     global current_headline
     global current_time
@@ -538,15 +535,15 @@ def get_headline(recent_only=True, news_source="gnews", article_count=1):
             return None
         # Recent headline only
         elif recent_only is True:
-            # if new headline is more than 60 minutes old, don't replace
+            # if new headline is more than recent_within minutes old, don't replace
             local_time_epoch = time.mktime(local_time_struct)
-            if epoch_diff(local_time_epoch) > 60:
+            if epoch_diff(local_time_epoch) > recent_within:
                 '''print(
                     "DO NOT REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
                     ))'''
                 return None
-            # if new headline is less than 60 minutes old, replace
+            # If new headline is less than 60 minutes old, replace
             else:
                 '''print(
                     "REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
@@ -600,7 +597,7 @@ def get_current_time():
     except Exception as e:
         print("Failed to get Adafruit IO time struct: {}".format(e))
         wifi.reset()
-    if json_response is not None:
+    if json_response:
         # Extract values from the JSON
         data = eval(json_response)
         time_values = [int(data[key]) for key in ['year', 'mon', 'mday', 'hour', 'min', 'sec', 'wday', 'yday', 'isdst']]
@@ -623,10 +620,16 @@ def get_current_time():
             wifi.reset()
 
 
-# Calculates difference between two epoch times
-# Input is a departure time in epoch time
-# Output is difference between departure and last current time in minutes
 def epoch_diff(epoch_time):
+    """
+    Calculate the difference in minutes between the given epoch time and the current time epoch.
+
+    Parameters:
+        epoch_time (int): The epoch time to calculate the difference with.
+
+    Returns:
+        int or None: The difference in minutes if the current time epoch is available, else None.
+    """
     global current_time_epoch
     if current_time_epoch is not None:
         difference = abs(epoch_time - current_time_epoch)
@@ -669,7 +672,6 @@ def send_notification(text):
 
 
 def is_valid_integer(string):
-
     try:
         int(string)
         return True
@@ -716,8 +718,6 @@ def main():
     last_event_check = None
     last_headline_check = None
     mode = "Day"
-
-    # TODO switch counters to loop modulos to save memory
 
     while True:
         # update current time struct and epoch
@@ -859,7 +859,7 @@ def main():
         # run garbage collection
         gc.collect()
         # print available memory
-        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
+        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes | time.monotonic size: {sys.getsizeof(time.monotonic())}")
 
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
