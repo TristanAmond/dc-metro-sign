@@ -23,7 +23,7 @@ except ImportError:
     raise
 
 # Stores train data
-station_code = secrets["station_code"]
+station_code = secrets["station code"]
 historical_trains = [None, None]
 
 # Stores nearest plane data
@@ -49,9 +49,10 @@ current_temp = []
 # Current time
 current_time = None
 current_time_epoch = None
+timezone_offset = None
 
 # Default operating hour start and end times
-start_time = 8
+start_time = 6
 end_time = 21
 
 # Notification queue
@@ -137,6 +138,11 @@ class Article:
         self.publishedAt = publishedAt
         self.title = title
 
+    def __repr__(self):
+        return ('Article(source=\'{self.source}\', title=\'{self.title}\', publishedTime=\'{self.publishedTime}\', '
+                'publishedAt=\'{self.publishedAt}\')').format(
+            self=self)
+
     def __getitem__(self, key):
         if key == 'source':
             return self.source
@@ -156,7 +162,7 @@ class Article:
 # --- TRANSIT API CALLS ---
 
 # queries WMATA API to return an array of two Train objects
-# input is StationCode from secrets.py, and a historical_trains array
+# input is station code from secrets.py, and a historical_trains array
 def get_trains(historical_trains):
     global station_code
     json_data = None
@@ -236,7 +242,7 @@ def get_nearest_plane(range=2.0):
     # request plane.json from local ADS-B receiver (default location for readsb)
     # sample format: http://XXX.XXX.X.XXX/tar1090/data/aircraft.json
     try:
-        response = wifi.get(secrets['plane_data_json_url'])
+        response = wifi.get(secrets['plane data json url'])
         json_data = response.json()
     except OSError as e:
         print("Failed to get PLANE data, retrying\n", e)
@@ -366,7 +372,7 @@ def get_weather(weather_data):
 def get_next_event():
     global next_event
     try:
-        response = wifi.get(secrets['event_data_json_url'])
+        response = wifi.get(secrets['event data json url'])
         json_data = response.json()
         del response
     except Exception as e:
@@ -398,50 +404,97 @@ def event_mode_switch(departure_time, diff=60):
 
 
 # --- HEADLINE FUNCTIONS ---
-# TODO localize this call?
-def get_headline(recent_only=False):
+def get_headline(recent_only=True, news_source="gnews", article_count=1):
     global current_headline
-    try:
-        response = wifi.get(secrets['headline_json_url'])
-        json_data = response.json()
-        del response
-    except Exception as e:
-        print("Failed to get HEADLINE data: {}".format(e))
-        return None
-    if json_data is not None:
+    global current_time
+    global timezone_offset
+    article_list = []
+
+    # Make API call to specified news source
+    request_url = None
+    if news_source == 'newsapi':
+        # Query News API with input count
+        request_url = f'https://newsapi.org/v2/top-headlines?country=us&pageSize={article_count}'
+        headers = {'X-Api-Key': secrets['news api key']}
+    elif news_source == 'gnews':
+        # Query GNews API with input count
+        request_url = f'https://gnews.io/api/v4/top-headlines?category=general&lang=en&country=us&max={article_count}'
+        request_url += f'&apikey={secrets["gnews api key"]}'
+        headers = {}
+    elif news_source == 'sample_data':
+        # Add sample API output here for testing
+        pass
+
+    if request_url is not None and news_source != 'sample_data':
         try:
-            new_headline = Article(
-                json_data['source'],
-                json_data['publishedTime'],
-                json_data['publishedAt'],
-                json_data['title']
-            )
+            response = wifi.get(request_url, headers=headers)
+            json_data = response.json()
+            del response
         except Exception as e:
-            print("Failed to create HEADLINE object: {}".format(e))
+            print("Failed to retrieve NEWS data from endpoint: {}".format(e))
             return None
 
-        # Check to see if the headline has changed
-        if recent_only is False and current_headline is not None and current_headline['title'] == new_headline['title']:
+    # Iterate through json data to create list of Article objects
+    if json_data is not None:
+        for item in json_data['articles']:
+            title = item['title'].split(' - ')[0].strip()
+            published_time = item['publishedAt'].split("T")[1].split(":")
+            published_time_hour = int(published_time[0])
+            published_time_min = published_time[1]
+
+            # Adjust the parsed_time using timezone_offset
+            # Convert timezone offset string to minutes
+            offset_hours = int(timezone_offset[:-2])
+            offset_minutes = int(timezone_offset[-2:])
+            offset_minutes_total = offset_hours * 60 + offset_minutes
+
+            # Apply timezone offset to the hour value
+            local_time_hour = (published_time_hour + (offset_minutes_total // 60)) % 24
+            local_time_struct = time.struct_time(
+                current_time[:3] + (published_time_hour,) + current_time[4:]
+            )
+            # Calculate AM/PM suffix
+            suffix = "AM" if local_time_hour < 12 else "PM"
+
+            local_time_string = f"{local_time_struct.tm_hour}:{local_time_struct.tm_min}{suffix}"  # Update the parsed_time format
+            article_list.append(Article(
+                item['source']['name'],
+                local_time_string,
+                item['publishedAt'],
+                title
+            )
+            )
+    if len(article_list) != 0:
+        new_headline = article_list.pop(0)
+
+        # Any headline and no current headline
+        if recent_only is False and current_headline is None:
+            current_headline = new_headline
+            return current_headline
+        # Any headline and current headline is the same as new headline
+        elif recent_only is False and current_headline is not None and current_headline.title == new_headline.title:
             return None
-        # Check to see if the headline is more than 60 minutes old
-        # TODO get this to actually work properly haha
+        # Recent headline only
         elif recent_only is True:
-            new_headline_epoch = convert_iso8601_to_seconds(new_headline['publishedAt'])
-            print(f"Headline epoch: {new_headline_epoch}")
-            new_headline_age = epoch_diff(new_headline_epoch)
-            print(f"Headline age: {new_headline_age}")
-            if new_headline_age > 60:
-                print(f"{new_headline['title']} is {new_headline_age} minutes old, skipping")
+            # if new headline is more than 60 minutes old, don't replace
+            local_time_epoch = time.mktime(local_time_struct)
+            if epoch_diff(local_time_epoch) > 60:
+                '''print(
+                    "DO NOT REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
+                        epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
+                    ))'''
                 return None
+            # if new headline is less than 60 minutes old, replace
             else:
+                '''print(
+                    "REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
+                        epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
+                    ))'''
                 current_headline = new_headline
                 return current_headline
 
-        else:
-            current_headline = new_headline
-            return current_headline
     else:
-        print("Failed to get HEADLINE data: json_data is None")
+        print("No headlines found, Article list length is 0")
         return None
 
 
@@ -450,68 +503,50 @@ def get_headline(recent_only=False):
 def get_current_time():
     global current_time
     global current_time_epoch
+    global timezone_offset
 
-    base_url = "http://io.adafruit.com/api/v2/time/"
+    base_url = "https://io.adafruit.com/api/v2/"
+
+    # Get current time in epoch seconds
     try:
-        response = wifi.get(base_url + "seconds")
+        response = wifi.get(base_url + "time/seconds")
         current_time_epoch = int(response.text)
         del response
     except Exception as e:
-        print(e)
+        print("Failed to get Adafruit IO epoch time: {}".format(e))
         wifi.reset()
 
+    # Get current time as a struct
     try:
-        response = wifi.get(base_url + "ISO-8601")
-        current_iso_time = response.text
-        current_time = parse_iso_time(current_iso_time)
+        request_url = (base_url + secrets["aio username"] +
+                       "/integrations/time/struct?x-aio-key=" + secrets["aio key"])
+        response = wifi.get(request_url)
+        json_response = response.text
         del response
     except Exception as e:
-        print(e)
+        print("Failed to get Adafruit IO time struct: {}".format(e))
         wifi.reset()
+    if json_response is not None:
+        # Extract values from the JSON
+        data = eval(json_response)
+        time_values = [int(data[key]) for key in ['year', 'mon', 'mday', 'hour', 'min', 'sec', 'wday', 'yday', 'isdst']]
 
+        # Create a current time struct
+        current_time = time.struct_time(time_values)
 
-def parse_iso_time(iso_time):
-    year = int(iso_time[0:4])
-    month = int(iso_time[5:7])
-    day = int(iso_time[8:10])
-    hours = int(iso_time[11:13])
-    minutes = int(iso_time[14:16])
-    seconds = int(iso_time[17:19])
-
-    # Adjust month and year for January and February
-    if month <= 2:
-        month += 12
-        year -= 1
-
-    # Calculate weekday using Zeller's Congruence algorithm
-    weekday = (day + 2 * month + 3 * (month + 1) // 5 + year + year // 4 - year // 100 + year // 400) % 7
-    time_tuple = (year, month, day, hours, minutes, seconds, weekday, -1, -1)
-    time_struct = time.struct_time(time_tuple)
-
-    return time_struct
-
-
-def convert_struct_to_epoch(struct_time):
-    date, t = struct_time.split("T")
-    year, month, day = map(int, date.split("-"))
-    hour, minute, second = map(int, t.split("-")[0].split(":"))
-
-    t = time.struct_time((year, month, day, hour, minute, second, -1, -1, -1))
-    epoch_time = time.mktime(t)
-    return epoch_time
-
-
-def convert_iso8601_to_seconds(timestamp):
-    # Split the timestamp into date and time components
-    date_str, time_str = timestamp.split('T')
-    # Parse the year, month, and day from the date component
-    year, month, day = map(int, date_str.split('-'))
-    # Parse the hour, minute, and second from the time component
-    hour, minute, second = map(int, time_str.split(':'))
-    # Calculate the total seconds since the epoch
-    seconds = (year - 1970) * 31536000 + month * 2592000 + day * 86400 + hour * 3600 + minute * 60 + second
-
-    return seconds
+    if timezone_offset is None:
+        # Get timezone offset for timezone in secrets.py
+        try:
+            request_url = (base_url + secrets["aio username"] +
+                           "/integrations/time/strftime?x-aio-key=" + secrets["aio key"] +
+                           "&tz=" + secrets["timezone"] +
+                           "&strftime=%25z")
+            response = wifi.get(request_url)
+            timezone_offset = response.text
+            del response
+        except Exception as e:
+            print("Failed to get Adafruit IO timezone: {}".format(e))
+            wifi.reset()
 
 
 # Calculates difference between two epoch times
@@ -520,7 +555,7 @@ def convert_iso8601_to_seconds(timestamp):
 def epoch_diff(epoch_time):
     global current_time_epoch
     if current_time_epoch is not None:
-        difference = epoch_time - current_time_epoch
+        difference = abs(epoch_time - current_time_epoch)
         return round(difference / 60)
     else:
         return None
@@ -559,7 +594,7 @@ def is_valid_integer(string):
 
 def add_commas_to_number(number_str):
     reversed_number = "".join(reversed(number_str))
-    groups = [reversed_number[i:i+3] for i in range(0, len(reversed_number), 3)]
+    groups = [reversed_number[i:i + 3] for i in range(0, len(reversed_number), 3)]
     formatted_number = ",".join("".join(reversed(group)) for group in reversed(groups))
 
     return formatted_number
@@ -657,8 +692,8 @@ def main():
                 except Exception as e:
                     print(f"Event error: {e}")
 
-            # Update top headline (default: 1 minute)
-            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 1:
+            # Update top headline (default: 15 minutes)
+            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 15:
                 global current_headline
                 # Check for a new headline
                 try:
@@ -677,11 +712,9 @@ def main():
                 else:
                     pass
                 last_headline_check = time.monotonic()
-            else:
-                pass
 
             # Push current time to the top of the notification queue at the top of the hour
-            if current_time.tm_min == 0:
+            if current_time.tm_min == 0 and current_time.tm_sec <= 15:
                 notification_queue.insert(0, f"Time is {current_time.tm_hour:02}:{current_time.tm_min:02}")
 
         # --- EVENT MODE ---
