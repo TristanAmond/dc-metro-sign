@@ -157,7 +157,8 @@ class Article:
             raise KeyError(f"Invalid key: {key}")
 
     def get_headline_string(self):
-        return f"{self.publishedTime} | {self.source}\n{self.title}"
+        headline_string = format_time_struct(self.publishedTime)
+        return f"{headline_string} | {self.source}\n{self.title}"
 
 
 # --- WEATHER API CALLS ---
@@ -378,14 +379,14 @@ def get_nearest_plane(range=2.0):
                                 entry["alt_geom"],
                                 float(entry_distance)
                             )
-                            print(nearest_plane.get_plane_string())
+                            # print(nearest_plane.get_plane_string())
                             # Separate emergency field as optional
                             if "emergency" in entry:
                                 nearest_plane.emergency = entry["emergency"]
                         except Exception as e:
                             print(f"couldn't update nearest plane entry: {e}")
                 else:
-                    print("Plane data didn't meet object criteria")
+                    # print("Plane data didn't meet object criteria")
                     pass
         except Exception as e:
             print("Failed to create PLANE object:", e)
@@ -507,18 +508,18 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
             offset_minutes = int(timezone_offset[-2:])
             offset_minutes_total = offset_hours * 60 + offset_minutes
 
-            # Apply timezone offset to the hour value
             local_time_hour = (published_time_hour + (offset_minutes_total // 60)) % 24
-            local_time_struct = time.struct_time(
-                current_time[:3] + (published_time_hour,) + current_time[4:]
-            )
-            # Calculate AM/PM suffix
-            suffix = "AM" if local_time_hour < 12 else "PM"
+            '''print(
+                f"Timezone Offset (min): {offset_minutes_total // 60} | current time hour: {current_time.tm_hour} | " +
+                f"publishedAt hour: {published_time_hour} | local_time_hour: {local_time_hour}")'''
 
-            local_time_string = f"{local_time_struct.tm_hour}:{local_time_struct.tm_min}{suffix}"  # Update the parsed_time format
+            local_time_struct = time.struct_time(
+                current_time[:3] + (local_time_hour,) + current_time[4:]
+            )
+
             article_list.append(Article(
                 item['source']['name'],
-                local_time_string,
+                local_time_struct,
                 item['publishedAt'],
                 title
             )
@@ -653,7 +654,7 @@ def check_open(start=start_time, end=end_time):
     hour = current_time.tm_hour
 
     # Within operating hours, current day is Sat/Sun
-    if hour < start + 1 and (weekday >= 5):
+    if hour < start + 1 and (weekday == 0 or weekday == 6):
         print("Metro closed: Sat/Sun before 7| D{} H{}".format(weekday, hour))
         return False
 
@@ -685,6 +686,28 @@ def add_commas_to_number(number_str):
     formatted_number = ",".join("".join(reversed(group)) for group in reversed(groups))
 
     return formatted_number
+
+
+def format_time_struct(time_struct):
+    """
+    Format the given time struct to a 12-hour format.
+
+    Args:
+        time_struct (time.struct_time): The time struct to be formatted.
+
+    Returns:
+        str: The formatted time string in the format "HH:MMAM/PM".
+    """
+    if time_struct.tm_hour == 0:
+        hour = 12
+    elif time_struct.tm_hour > 12:
+        hour = time_struct.tm_hour % 12
+    else:
+        hour = time_struct.tm_hour
+    minute = "{:02d}".format(time_struct.tm_min)
+    # Calculate AM/PM suffix
+    suffix = "AM" if time_struct.tm_hour < 12 else "PM"
+    return f"{hour}:{minute} {suffix}"
 
 
 # --- OPERATING LOOP ------------------------------------------
@@ -724,10 +747,8 @@ def main():
         get_current_time()
         last_time_check = time.monotonic()
         if loop_counter == 1:
-            print(
-                f"Current Time: {current_time.tm_hour:02}:{current_time.tm_min:02} Wkd: {current_time.tm_wday}" +
-                f"| Epoch Time: {current_time_epoch}"
-            )
+            time_info = format_time_struct(current_time)
+            print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
 
         # check if display should be in night mode
         try:
@@ -854,12 +875,13 @@ def main():
             except Exception as e:
                 print(f"Notification Error: {e}")
 
-        # refresh display
+        # Refresh display
         display_manager.refresh_display()
-        # run garbage collection
+        # Run garbage collection
         gc.collect()
-        # print available memory
-        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
+        if loop_counter % 5 == 0:
+            # Print available memory
+            print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
 
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
