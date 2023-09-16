@@ -859,7 +859,7 @@ def main():
         # run garbage collection
         gc.collect()
         # print available memory
-        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes | time.monotonic size: {sys.getsizeof(time.monotonic())}")
+        print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
 
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
