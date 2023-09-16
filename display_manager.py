@@ -16,12 +16,13 @@ icon_spritesheet = cwd + "/bmp/weather-icons.bmp"
 symbol_font = bitmap_font.load_font("/bdf/trend_icons.bdf")
 
 # custom colors hex codes
-metro_orange=0xf06a37
-metro_red=0xda1b30
-metro_green=0x49742a
+metro_orange = 0xf06a37
+metro_red = 0xda1b30
+metro_green = 0x49742a
 
 # custom scroll delay for scroll_text
 scroll_delay = 0.03
+
 
 class display_manager(displayio.Group):
     def __init__(
@@ -73,12 +74,12 @@ class display_manager(displayio.Group):
         self.append(self._train_board_group)
 
         # set default column and row measurements
-        self.col1=4
-        self.col2=28
-        self.col25=52
-        self.col3=108
-        self.row1=8
-        self.row2=24
+        self.col1 = 4
+        self.col2 = 28
+        self.col25 = 52
+        self.col3 = 108
+        self.row1 = 8
+        self.row2 = 24
 
         # Load the icon sprite sheet
         icons = displayio.OnDiskBitmap(open(icon_spritesheet, "rb"))
@@ -190,7 +191,7 @@ class display_manager(displayio.Group):
     # helper function to assign color to minutes labels
     def get_minutes_color(self, minutes):
         try:
-            if minutes=="ARR" or minutes=="BRD":
+            if minutes == "ARR" or minutes == "BRD":
                 return metro_red
             else:
                 return metro_orange
@@ -308,7 +309,6 @@ class display_manager(displayio.Group):
 
         self.top_row_train_text.color = metro_orange
         self.top_row_train_min.color = metro_orange
-
 
     def night_mode_toggle(self, trigger):
         # night mode is activated, hide all groups

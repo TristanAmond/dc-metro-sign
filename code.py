@@ -163,8 +163,17 @@ class Article:
 
 # queries WMATA API to return an array of two Train objects
 # input is station code from secrets.py, and a historical_trains array
-def get_trains(historical_trains):
+def get_trains():
+    """
+    Retrieves train data from the WMATA API based on the input station code.
+
+    This function queries the WMATA API using the provided station code and retrieves train prediction data for the specified station. It sets up two train directions: A and B, and assigns train objects to these directions based on the prediction data. It then updates the historical trains with the new train objects if they are found. Finally, it prints the destination name and minutes for each train, and returns a list of the train objects.
+
+    Returns:
+        List[Train]: A list of train objects representing the predicted train data.
+    """
     global station_code
+    global historical_trains
     json_data = None
     a_train = None
     b_train = None
@@ -237,6 +246,15 @@ def get_trains(historical_trains):
 
 # --- PLANE API CALLS ---
 def get_nearest_plane(range=2.0):
+    """
+    Retrieves the nearest plane within a given range.
+
+    Args:
+        range (float, optional): The range within which to search for planes. Defaults to 2.0.
+
+    Returns:
+        None
+    """
     global nearest_plane
     json_data = None
     # request plane.json from local ADS-B receiver (default location for readsb)
@@ -290,16 +308,28 @@ def get_nearest_plane(range=2.0):
 
 # queries Openweather API to return a dict with current and 3 hr forecast weather data
 # input is latitude and longitude coordinates for weather location
-def get_weather(weather_data):
+def get_weather():
+    """
+    Retrieves weather data from the OpenWeather API based on the provided latitude and longitude.
+
+    Args:
+        weather_data (dict): A dictionary to store the weather data.
+
+    Returns:
+        bool: True if the weather data is successfully retrieved and updated in the dictionary.
+    """
+    global weather_data
+    global current_time
+
+    # Query Openweather for weather at location defined by input lat, long
     try:
-        # query Openweather for weather at location defined by input lat, long
-        base_URL = 'https://api.openweathermap.org/data/3.0/onecall?'
+        base_url = 'https://api.openweathermap.org/data/3.0/onecall?'
         latitude = secrets['dc coords x']
         longitude = secrets['dc coords y']
         units = 'imperial'
         api_key = secrets['openweather api key']
         exclude = 'minutely,alerts'
-        response = wifi.get(base_URL
+        response = wifi.get(base_url
                             + 'lat=' + latitude
                             + '&lon=' + longitude
                             + '&exclude=' + exclude
@@ -309,45 +339,43 @@ def get_weather(weather_data):
         weather_json = response.json()
         del response
 
-        # insert/update icon and current weather data in dict
+        # Insert/update icon and current weather data in dict
         weather_data["icon"] = weather_json["current"]["weather"][0]["icon"]
         weather_data["current_temp"] = weather_json["current"]["temp"]
         weather_data["current_feels_like"] = weather_json["current"]["feels_like"]
-        # insert daily forecast min and max temperature into dict
+        # Insert daily forecast min and max temperature into dict
         weather_data["daily_temp_min"] = weather_json["daily"][0]["temp"]["min"]
         weather_data["daily_temp_max"] = weather_json["daily"][0]["temp"]["max"]
-        # insert next hour + 1 forecast temperature and feels like into dict
+        # Insert next hour + 1 forecast temperature and feels like into dict
         weather_data["hourly_next_temp"] = weather_json["hourly"][2]["temp"]
         weather_data["hourly_feels_like"] = weather_json["hourly"][2]["feels_like"]
 
-        # clean up response
+        # Clean up response
         del weather_json
 
-        global current_time
-
-        # set daily highest temperature
+        # Set daily highest temperature
         global highest_temp
-        # if daily highest temperature hasn't been set or is from a previous day
+        # If daily highest temperature hasn't been set or is from a previous day
         if highest_temp[0] is None or highest_temp[1] != current_time.tm_wday:
             highest_temp[0] = weather_data["daily_temp_max"]
             highest_temp[1] = current_time.tm_wday
-        # if stored highest temp is less than new highest temp
+        # If stored highest temp is less than new highest temp
         elif highest_temp[0] < weather_data["daily_temp_max"]:
             highest_temp[0] = weather_data["daily_temp_max"]
-        # if stored highest temp is greater than new highest temp
+        # If stored highest temp is greater than new highest temp
         elif highest_temp[0] > weather_data["daily_temp_max"]:
             weather_data["daily_temp_max"] = highest_temp[0]
 
-        # set daily lowest temperature
+        # Set daily lowest temperature
         global lowest_temp
-        # if daily lowest temperature hasn't been set or is from a previous day
+        # If daily lowest temperature hasn't been set or is from a previous day
         if lowest_temp[0] is None or lowest_temp[1] != current_time.tm_wday:
             lowest_temp[0] = weather_data["daily_temp_min"]
             lowest_temp[1] = current_time.tm_wday
-        # if daily lowest temp is greater than new lowest temp
+        # If daily lowest temp is greater than new lowest temp
         elif lowest_temp[0] > weather_data["daily_temp_min"]:
             lowest_temp[0] = weather_data["daily_temp_min"]
-        # if daily lowest temp is less than new lowest temp
+        # If daily lowest temp is less than new lowest temp
         elif lowest_temp[0] < weather_data["daily_temp_min"]:
             weather_data["daily_temp_min"] = lowest_temp[0]
 
@@ -366,10 +394,20 @@ def get_weather(weather_data):
 
 
 # --- EVENT API CALLS ---
-
-# retrieve an event from a local Raspberry Pi
-# sample format: http://XXX.XXX.X.XXX/next_event.json
 def get_next_event():
+    """
+    Retrieves the next scheduled event from the API.
+
+    This function makes a request to the specified event data JSON URL
+    and retrieves the response. It then parses the JSON data to extract
+    the departure time and the departure train information of the next event.
+    Sample format: http://XXX.XXX.X.XXX/next_event.json
+
+    Returns:
+        dict or None: A dictionary containing the departure time and
+        departure train information of the next event if successful,
+        None otherwise.
+    """
     global next_event
     try:
         response = wifi.get(secrets['event data json url'])
@@ -391,8 +429,17 @@ def get_next_event():
         return None
 
 
-# switches mode to event if calculated departure is within 60 minutes
 def event_mode_switch(departure_time, diff=60):
+    """
+    Returns the mode to switch based on the departure time.
+
+    Parameters:
+    - departure_time (datetime): The departure time.
+    - diff (int, optional): The time difference in minutes. Default is 60.
+
+    Returns:
+    - str: The mode to switch based on the departure time. It can be either "Event" or "Day".
+    """
     departure_diff = epoch_diff(departure_time)
 
     # if departure time is within timeframe, switch mode to event
@@ -405,6 +452,21 @@ def event_mode_switch(departure_time, diff=60):
 
 # --- HEADLINE FUNCTIONS ---
 def get_headline(recent_only=True, news_source="gnews", article_count=1):
+    """
+    Retrieves the latest headline from a specified news source.
+
+    Args:
+        recent_only (bool, optional): Specifies whether to retrieve only recent headlines. Defaults to True.
+        news_source (str, optional): The news source to retrieve headlines from. Can be 'gnews', 'newsapi', or 'sample_data'. Defaults to "gnews".
+        article_count (int, optional): The number of headlines to retrieve. Defaults to 1.
+
+    Returns:
+        Article or None: The latest headline as an Article object if recent_only is False and there are headlines available. None if recent_only is True and the latest headline is more than 60 minutes old, or if recent_only is False and the latest headline is the same as the current headline, or if no headlines are found.
+
+    Raises:
+        Exception: If there is an error retrieving the news data from the API.
+
+    """
     global current_headline
     global current_time
     global timezone_offset
@@ -425,7 +487,7 @@ def get_headline(recent_only=True, news_source="gnews", article_count=1):
         # Add sample API output here for testing
         pass
 
-    if request_url is not None and news_source != 'sample_data':
+    if request_url and news_source != 'sample_data':
         try:
             response = wifi.get(request_url, headers=headers)
             json_data = response.json()
@@ -435,7 +497,7 @@ def get_headline(recent_only=True, news_source="gnews", article_count=1):
             return None
 
     # Iterate through json data to create list of Article objects
-    if json_data is not None:
+    if json_data:
         for item in json_data['articles']:
             title = item['title'].split(' - ')[0].strip()
             published_time = item['publishedAt'].split("T")[1].split(":")
@@ -468,11 +530,11 @@ def get_headline(recent_only=True, news_source="gnews", article_count=1):
         new_headline = article_list.pop(0)
 
         # Any headline and no current headline
-        if recent_only is False and current_headline is None:
+        if not recent_only and current_headline is None:
             current_headline = new_headline
             return current_headline
         # Any headline and current headline is the same as new headline
-        elif recent_only is False and current_headline is not None and current_headline.title == new_headline.title:
+        elif not recent_only and current_headline is not None and current_headline.title == new_headline.title:
             return None
         # Recent headline only
         elif recent_only is True:
@@ -499,8 +561,20 @@ def get_headline(recent_only=True, news_source="gnews", article_count=1):
 
 
 # --- TIME MGMT FUNCTIONS ---
-
 def get_current_time():
+    """
+    Retrieves the current time from Adafruit IO API and stores it in the global variables.
+    This function makes up to three API requests to Adafruit IO:
+    1. Get current time in epoch seconds.
+    2. Get current time as a struct.
+    3. Get timezone offset if it hasn't already been retrieved.
+
+    Parameters:
+        None
+
+    Returns:
+        None
+    """
     global current_time
     global current_time_epoch
     global timezone_offset
@@ -562,6 +636,16 @@ def epoch_diff(epoch_time):
 
 
 def check_open(start=start_time, end=end_time):
+    """
+    Check if the current time falls within the operating hours.
+
+    Parameters:
+        start (int, optional): The start time of the operating hours. Defaults to start_time.
+        end (int, optional): The end time of the operating hours. Defaults to end_time.
+
+    Returns:
+        bool: True if the current time falls within the operating hours, False otherwise.
+    """
     weekday = current_time.tm_wday
     hour = current_time.tm_hour
 
@@ -585,6 +669,7 @@ def send_notification(text):
 
 
 def is_valid_integer(string):
+
     try:
         int(string)
         return True
@@ -602,12 +687,28 @@ def add_commas_to_number(number_str):
 
 # --- OPERATING LOOP ------------------------------------------
 def main():
+    """
+    Runs the main loop of the program.
+
+    This function contains the main logic of the program, which continuously updates the current time, checks for
+    mode changes, fetches weather data, updates train data, updates plane data, updates event data, updates the top
+    headline, handles the notification queue, refreshes the display, and prints available memory.
+
+    Parameters:
+        None
+
+    Returns:
+        None
+    """
     global current_time
     global start_time
     global end_time
-    global next_event
-    global nearest_plane
+    global weather_data
     global historical_trains
+    global nearest_plane
+    global next_event
+    global current_headline
+
     loop_counter = 1
     last_weather_check = None
     last_train_check = None
@@ -648,7 +749,7 @@ def main():
             # fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 try:
-                    get_weather(weather_data)
+                    get_weather()
                     # update weather display component
                     display_manager.update_weather(weather_data)
                 except Exception as e:
@@ -658,7 +759,7 @@ def main():
             # update train data (default: 15 seconds)
             if last_train_check is None or time.monotonic() > last_train_check + 15:
                 try:
-                    trains = get_trains(historical_trains)
+                    trains = get_trains()
                     # update train display component
                     display_manager.update_trains(trains, historical_trains)
                 except Exception as e:
