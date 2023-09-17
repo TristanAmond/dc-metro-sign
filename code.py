@@ -1,6 +1,5 @@
 import board
 import gc
-import sys
 import time
 import busio
 from digitalio import DigitalInOut
@@ -13,7 +12,7 @@ from adafruit_esp32spi import adafruit_esp32spi_wifimanager
 
 import display_manager
 
-print("All imports loaded | Available memory: {} bytes".format(gc.mem_free()))
+print(f"All imports loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- CONSTANTS SETUP ---
 
@@ -66,7 +65,7 @@ notification_queue = []
 # (https://www.adafruit.com/product/2278)
 matrix = Matrix(width=128, height=32, bit_depth=2, tile_rows=1)
 display_manager = display_manager.display_manager(matrix.display)
-print("Display loaded | Available memory: {} bytes".format(gc.mem_free()))
+print(f"Display loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- WIFI SETUP ---
 # Initialize ESP32 Pins:
@@ -80,11 +79,9 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 status_light = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.2)
 # Initialize Wi-Fi object
 wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, status_light, attempts=5)
-# wifi.connect()
 
 gc.collect()
-print("WiFi loaded | Available memory: {} bytes".format(gc.mem_free()))
-
+print(f"WiFi loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- CLASSES ---
 
@@ -500,7 +497,6 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
             title = item['title'].split(' - ')[0].strip()
             published_time = item['publishedAt'].split("T")[1].split(":")
             published_time_hour = int(published_time[0])
-            published_time_min = published_time[1]
 
             # Adjust the parsed_time using timezone_offset
             # Convert timezone offset string to minutes
@@ -665,6 +661,23 @@ def check_open(start=start_time, end=end_time):
     # Not in operating hours
     else:
         return False
+
+
+# --- ADAFRUIT IO FUNCTIONS ---
+
+def send_feed_data(feed_key, data):
+    request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data"
+    headers = {'X-AIO-Key': secrets['aio key']}
+    payload = {'value': data}
+    response = wifi.post(request_url, headers=headers, json=payload)
+    return response.status_code, response.json()
+
+
+def get_feed_data(feed_key, limit=1):
+    request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data?limit={limit}"
+    headers = {'X-AIO-Key': secrets['aio key']}
+    response = wifi.get(request_url, headers=headers)
+    return response.status_code, response.json()
 
 
 # --- MISC. FUNCTIONS ---
@@ -879,9 +892,11 @@ def main():
         display_manager.refresh_display()
         # Run garbage collection
         gc.collect()
-        if loop_counter % 5 == 0:
-            # Print available memory
+
+        if loop_counter % 5 == 0 or loop_counter == 1:
+            # Output local diagnostics
             print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
+            # Output Adafruit IO diagnostics
 
         # if any checks haven't run in a long time, restart the Matrix Portal
         # weather check: 60 minutes
