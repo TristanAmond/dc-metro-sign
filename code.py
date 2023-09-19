@@ -235,7 +235,7 @@ def get_weather():
         elif lowest_temp[0] < weather_data["daily_temp_min"]:
             weather_data["daily_temp_min"] = lowest_temp[0]
 
-        print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
+        #print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
 
         # add current temp to historical array
         global current_temp
@@ -544,14 +544,16 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
                     ))'''
                 return None
-            # If new headline is less than 60 minutes old, replace
-            else:
+            # If new headline is less than 60 minutes old and title is different, replace
+            elif current_headline is None or (current_headline is not None and current_headline.title != new_headline.title):
                 '''print(
                     "REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
                     ))'''
                 current_headline = new_headline
                 return current_headline
+            else:
+                return None
 
     else:
         print("No headlines found, Article list length is 0")
@@ -685,7 +687,7 @@ def get_feed_data(feed_key, limit=1):
         return response.status_code, response.json()
     except Exception as e:
         print("Failed to get Adafruit IO data: {}".format(e))
-        return None
+        return 400, "{}"
 
 
 # --- MISC. FUNCTIONS ---
@@ -734,17 +736,24 @@ def format_time_struct(time_struct):
 # --- OPERATING LOOP ------------------------------------------
 def main():
     """
-    Runs the main loop of the program.
+    The main function that controls the execution of the program.
 
-    This function contains the main logic of the program, which continuously updates the current time, checks for
-    mode changes, fetches weather data, updates train data, updates plane data, updates event data, updates the top
-    headline, handles the notification queue, refreshes the display, and prints available memory.
+    This function initializes all the global variables and enters into an infinite loop.
+    Within the loop, it checks for a RESET command from the Adafruit IO feed and resets the microcontroller if necessary.
+    It updates the current time and checks if the display should be in night mode based on the opening hours.
 
-    Parameters:
-        None
+    If the display is in day mode, it fetches the weather data, updates the weather display, updates the train data,
+    updates the plane data, updates the event data, and updates the top headline.
 
-    Returns:
-        None
+    If the display is in event mode, it fetches the weather data, calculates the time until departure, and updates
+    the event display.
+
+    It also handles the notification queue, refreshes the display, and performs garbage collection.
+
+    Every 5th loop iteration, or on the first iteration, it outputs local diagnostics and Adafruit IO diagnostics.
+    It checks for an updated start time from the Adafruit IO feed.
+
+    It increments the loop counter and sleeps for a certain amount of time based on the mode.
     """
     global current_time
     global start_time
