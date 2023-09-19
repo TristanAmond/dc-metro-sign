@@ -1,11 +1,10 @@
 import board
 import gc
-import sys
 import time
 import busio
 from digitalio import DigitalInOut
 import neopixel
-import supervisor
+import microcontroller
 
 from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
@@ -13,7 +12,7 @@ from adafruit_esp32spi import adafruit_esp32spi_wifimanager
 
 import display_manager
 
-print("All imports loaded | Available memory: {} bytes".format(gc.mem_free()))
+print(f"All imports loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- CONSTANTS SETUP ---
 
@@ -66,7 +65,7 @@ notification_queue = []
 # (https://www.adafruit.com/product/2278)
 matrix = Matrix(width=128, height=32, bit_depth=2, tile_rows=1)
 display_manager = display_manager.display_manager(matrix.display)
-print("Display loaded | Available memory: {} bytes".format(gc.mem_free()))
+print(f"Display loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- WIFI SETUP ---
 # Initialize ESP32 Pins:
@@ -80,10 +79,10 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 status_light = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.2)
 # Initialize Wi-Fi object
 wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, status_light, attempts=5)
-# wifi.connect()
+wifi.timeout = 20
 
 gc.collect()
-print("WiFi loaded | Available memory: {} bytes".format(gc.mem_free()))
+print(f"WiFi loaded | Available memory: {gc.mem_free()} bytes")
 
 
 # --- CLASSES ---
@@ -236,7 +235,7 @@ def get_weather():
         elif lowest_temp[0] < weather_data["daily_temp_min"]:
             weather_data["daily_temp_min"] = lowest_temp[0]
 
-        print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
+        #print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
 
         # add current temp to historical array
         global current_temp
@@ -488,8 +487,12 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
     if request_url and news_source != 'sample_data':
         try:
             response = wifi.get(request_url, headers=headers)
-            json_data = response.json()
-            del response
+            if response.status_code == 200:
+                json_data = response.json()
+                del response
+            else:
+                print("Failed to retrieve NEWS data from endpoint: {}".format(response.status_code))
+                return None
         except Exception as e:
             print("Failed to retrieve NEWS data from endpoint: {}".format(e))
             return None
@@ -500,21 +503,18 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
             title = item['title'].split(' - ')[0].strip()
             published_time = item['publishedAt'].split("T")[1].split(":")
             published_time_hour = int(published_time[0])
-            published_time_min = published_time[1]
+            published_time_minutes = int(published_time[1])
 
             # Adjust the parsed_time using timezone_offset
             # Convert timezone offset string to minutes
             offset_hours = int(timezone_offset[:-2])
             offset_minutes = int(timezone_offset[-2:])
             offset_minutes_total = offset_hours * 60 + offset_minutes
-
             local_time_hour = (published_time_hour + (offset_minutes_total // 60)) % 24
-            '''print(
-                f"Timezone Offset (min): {offset_minutes_total // 60} | current time hour: {current_time.tm_hour} | " +
-                f"publishedAt hour: {published_time_hour} | local_time_hour: {local_time_hour}")'''
 
+            # Create local time struct
             local_time_struct = time.struct_time(
-                current_time[:3] + (local_time_hour,) + current_time[4:]
+                current_time[:3] + (local_time_hour,) + (published_time_minutes,) + current_time[5:]
             )
 
             article_list.append(Article(
@@ -544,14 +544,16 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
                     ))'''
                 return None
-            # If new headline is less than 60 minutes old, replace
-            else:
+            # If new headline is less than 60 minutes old and title is different, replace
+            elif current_headline is None or (current_headline is not None and current_headline.title != new_headline.title):
                 '''print(
                     "REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
                     ))'''
                 current_headline = new_headline
                 return current_headline
+            else:
+                return None
 
     else:
         print("No headlines found, Article list length is 0")
@@ -579,15 +581,6 @@ def get_current_time():
 
     base_url = "https://io.adafruit.com/api/v2/"
 
-    # Get current time in epoch seconds
-    try:
-        response = wifi.get(base_url + "time/seconds")
-        current_time_epoch = int(response.text)
-        del response
-    except Exception as e:
-        print("Failed to get Adafruit IO epoch time: {}".format(e))
-        wifi.reset()
-
     # Get current time as a struct
     try:
         request_url = (base_url + secrets["aio username"] +
@@ -605,6 +598,11 @@ def get_current_time():
 
         # Create a current time struct
         current_time = time.struct_time(time_values)
+
+    # Get current time in epoch seconds
+    current_time_epoch = time.mktime(current_time)
+
+    # Get timezone offset
 
     if timezone_offset is None:
         # Get timezone offset for timezone in secrets.py
@@ -667,6 +665,31 @@ def check_open(start=start_time, end=end_time):
         return False
 
 
+# --- ADAFRUIT IO FUNCTIONS ---
+
+def send_feed_data(feed_key, data):
+    request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data"
+    headers = {'X-AIO-Key': secrets['aio key']}
+    payload = {'value': data}
+    try:
+        response = wifi.post(request_url, headers=headers, json=payload)
+        return response.status_code, response.json()
+    except Exception as e:
+        print("Failed to send Adafruit IO data: {}".format(e))
+        return None
+
+
+def get_feed_data(feed_key, limit=1):
+    request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data?limit={limit}"
+    headers = {'X-AIO-Key': secrets['aio key']}
+    try:
+        response = wifi.get(request_url, headers=headers)
+        return response.status_code, response.json()
+    except Exception as e:
+        print("Failed to get Adafruit IO data: {}".format(e))
+        return 400, "{}"
+
+
 # --- MISC. FUNCTIONS ---
 def send_notification(text):
     display_manager.scroll_text(text)
@@ -713,17 +736,24 @@ def format_time_struct(time_struct):
 # --- OPERATING LOOP ------------------------------------------
 def main():
     """
-    Runs the main loop of the program.
+    The main function that controls the execution of the program.
 
-    This function contains the main logic of the program, which continuously updates the current time, checks for
-    mode changes, fetches weather data, updates train data, updates plane data, updates event data, updates the top
-    headline, handles the notification queue, refreshes the display, and prints available memory.
+    This function initializes all the global variables and enters into an infinite loop.
+    Within the loop, it checks for a RESET command from the Adafruit IO feed and resets the microcontroller if necessary.
+    It updates the current time and checks if the display should be in night mode based on the opening hours.
 
-    Parameters:
-        None
+    If the display is in day mode, it fetches the weather data, updates the weather display, updates the train data,
+    updates the plane data, updates the event data, and updates the top headline.
 
-    Returns:
-        None
+    If the display is in event mode, it fetches the weather data, calculates the time until departure, and updates
+    the event display.
+
+    It also handles the notification queue, refreshes the display, and performs garbage collection.
+
+    Every 5th loop iteration, or on the first iteration, it outputs local diagnostics and Adafruit IO diagnostics.
+    It checks for an updated start time from the Adafruit IO feed.
+
+    It increments the loop counter and sleeps for a certain amount of time based on the mode.
     """
     global current_time
     global start_time
@@ -743,14 +773,25 @@ def main():
     mode = "Day"
 
     while True:
-        # update current time struct and epoch
+
+        # Check Adafruit IO for RESET command
+        updated_reset_status, updated_reset = get_feed_data(secrets['aio reset'])
+        if updated_reset_status == 200 and updated_reset[0]['value'] == 1:
+            print("Resetting Now: {}".format(updated_reset))
+            send_feed_data(secrets['aio reset'], 0)
+            time.sleep(3)
+            microcontroller.reset()
+        else:
+            pass
+
+        # Update current time struct and epoch
         get_current_time()
         last_time_check = time.monotonic()
         if loop_counter == 1:
             time_info = format_time_struct(current_time)
             print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
 
-        # check if display should be in night mode
+        # Check if display should be in night mode
         try:
             if check_open() and mode != "Event":
                 mode = "Day"
@@ -765,29 +806,29 @@ def main():
             pass
         gc.collect()
 
-        # --- DAY MODE
+        # --- DAY MODE ---
         if mode is "Day":
-            # fetch weather data on start and recurring (default: 10 minutes)
+            # Fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 try:
                     get_weather()
-                    # update weather display component
+                    # Update weather display component
                     display_manager.update_weather(weather_data)
                 except Exception as e:
                     print(f"Weather error: {e}")
                 last_weather_check = time.monotonic()
 
-            # update train data (default: 15 seconds)
+            # Update train data (default: 15 seconds)
             if last_train_check is None or time.monotonic() > last_train_check + 15:
                 try:
                     trains = get_trains()
-                    # update train display component
+                    # Update train display component
                     display_manager.update_trains(trains, historical_trains)
                 except Exception as e:
                     print(f"Train error: {e}")
                 last_train_check = time.monotonic()
 
-            # update plane data (default: 5 minutes)
+            # Update plane data (default: 5 minutes)
             if last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5:
                 try:
                     get_nearest_plane()
@@ -799,14 +840,14 @@ def main():
                     notification_queue.append(nearest_plane.get_plane_string())
                     nearest_plane = None
 
-            # update event data (default: 5 minutes)
+            # Update event data (default: 5 minutes)
             if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
                 try:
-                    # check for event departure
+                    # Check for event departure
                     next_event = get_next_event()
                     last_event_check = time.monotonic()
                     if next_event is not None:
-                        # switch to event mode if time is within an hour
+                        # Switch to event mode if time is within an hour
                         mode = event_mode_switch(next_event['departure_time'])
                         pass
                     else:
@@ -814,8 +855,8 @@ def main():
                 except Exception as e:
                     print(f"Event error: {e}")
 
-            # Update top headline (default: 15 minutes)
-            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 15:
+            # Update top headline (default: 12 minutes)
+            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 12:
                 global current_headline
                 # Check for a new headline
                 try:
@@ -841,19 +882,19 @@ def main():
 
         # --- EVENT MODE ---
         if mode is "Event":
-            # fetch weather data on start and recurring (default: 10 minutes)
+            # Fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 weather = get_weather(weather_data)
                 if weather:
                     last_weather_check = time.monotonic()
-                # update weather display component
+                # Update weather display component
                 display_manager.update_weather(weather_data)
 
-            # calculate time until departure
+            # Calculate time until departure
             if next_event is not None:
                 departure_countdown = epoch_diff(next_event['departure_time'])
                 if departure_countdown >= 1:
-                    # test printing TODO remove
+                    # Test printing TODO remove
                     print("Current time: {}:{} | Departure countdown: {}".format(
                         current_time.tm_hour, current_time.tm_min, departure_countdown)
                     )
@@ -879,22 +920,49 @@ def main():
         display_manager.refresh_display()
         # Run garbage collection
         gc.collect()
-        if loop_counter % 5 == 0:
-            # Print available memory
-            print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
 
-        # if any checks haven't run in a long time, restart the Matrix Portal
-        # weather check: 60 minutes
-        # train check: 10 minutes
-        if mode == "Day" and time.monotonic() - last_train_check >= 60 * 10 and time.monotonic() - last_time_check >= 60 * 60:
-            print(
-                "Supervisor reloading\nLast Weather Check: {} | Last Train Check: {}".format(
-                    last_weather_check,
-                    last_train_check
-                )
-            )
-            time.sleep(5)
-            supervisor.reload()
+        # Output diagnostics loop
+        if loop_counter % 5 == 0 or loop_counter == 1:
+            # Output local diagnostics
+            print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
+            # Output Adafruit IO diagnostics
+            if last_train_check is not None:
+                check_diff_seconds = time.monotonic() - last_train_check
+                response = send_feed_data(secrets['aio train'], check_diff_seconds)
+                if response is not None and response[0] != 200:
+                    print(f"Last Train Check: {response[1]}")
+            if last_plane_check is not None:
+                check_diff_seconds = time.monotonic() - last_plane_check
+                response = send_feed_data(secrets['aio plane'], check_diff_seconds / 60)
+                if response is not None and response[0] != 200:
+                    print(f"Nearest Plane: {response[1]}")
+            if last_event_check is not None:
+                check_diff_seconds = time.monotonic() - last_event_check
+                response = send_feed_data(secrets['aio event'], check_diff_seconds / 60)
+                if response is not None and response[0] != 200:
+                    print(f"Last Event Check: {response[1]}")
+            if last_headline_check is not None:
+                check_diff_seconds = time.monotonic() - last_headline_check
+                response = send_feed_data(secrets['aio headline'], check_diff_seconds / 60)
+                if response is not None and response[0] != 200:
+                    print(f"Headline: {response[1]}")
+            response = send_feed_data(secrets['aio loop counter'], loop_counter)
+            if response is not None and response[0] != 200:
+                print(f"Loop Counter: {response[1]}")
+
+            # Check Adafruit IO for updated start time
+            try:
+                updated_start_time_status, updated_start_time = get_feed_data(secrets['aio start time'])
+            except Exception as e:
+                print(f"Failed to get start time: {e}")
+                updated_start_time_status, updated_start_time = None, None
+            if (updated_start_time_status is not None and updated_start_time_status == 200
+                    and updated_start_time is not None and int(updated_start_time[0]['value']) != start_time):
+                start_time = updated_start_time[0]['value']
+
+                print(f"Updated start time: {updated_start_time[0]['value']}")
+            else:
+                pass
 
         # Increment loop and sleep
         # Day mode: 10 seconds
