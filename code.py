@@ -235,7 +235,7 @@ def get_weather():
         elif lowest_temp[0] < weather_data["daily_temp_min"]:
             weather_data["daily_temp_min"] = lowest_temp[0]
 
-        #print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
+        # print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
 
         # add current temp to historical array
         global current_temp
@@ -247,6 +247,7 @@ def get_weather():
     except Exception as e:
         print("Failed to get WEATHER data, retrying\n", e)
         wifi.reset()
+        pass
 
 
 # --- METRO API CALLS ---
@@ -545,7 +546,8 @@ def get_headline(recent_only=True, recent_within=90, news_source="gnews", articl
                     ))'''
                 return None
             # If new headline is less than 60 minutes old and title is different, replace
-            elif current_headline is None or (current_headline is not None and current_headline.title != new_headline.title):
+            elif current_headline is None or (
+                    current_headline is not None and current_headline.title != new_headline.title):
                 '''print(
                     "REPLACE: New headline is {} minutes old | Adjusted time: {}:{}".format(
                         epoch_diff(local_time_epoch), local_time_struct.tm_hour, local_time_struct.tm_min,
@@ -591,13 +593,16 @@ def get_current_time():
     except Exception as e:
         print("Failed to get Adafruit IO time struct: {}".format(e))
         wifi.reset()
-    if json_response:
+        json_response = None
+    if json_response is not None:
         # Extract values from the JSON
         data = eval(json_response)
         time_values = [int(data[key]) for key in ['year', 'mon', 'mday', 'hour', 'min', 'sec', 'wday', 'yday', 'isdst']]
 
         # Create a current time struct
         current_time = time.struct_time(time_values)
+    else:
+        get_current_time()
 
     # Get current time in epoch seconds
     current_time_epoch = time.mktime(current_time)
@@ -668,6 +673,15 @@ def check_open(start=start_time, end=end_time):
 # --- ADAFRUIT IO FUNCTIONS ---
 
 def send_feed_data(feed_key, data):
+    """
+    Sends data to Adafruit IO.
+    Args:
+        feed_key:
+        data:
+
+    Returns:
+
+    """
     request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data"
     headers = {'X-AIO-Key': secrets['aio key']}
     payload = {'value': data}
@@ -680,6 +694,16 @@ def send_feed_data(feed_key, data):
 
 
 def get_feed_data(feed_key, limit=1):
+    """
+    Gets data from Adafruit IO.
+    Args:
+        feed_key:
+        limit:
+
+    Returns:
+        'status_code': The HTTP status code from the request
+        'response': The JSON data
+    """
     request_url = f"https://io.adafruit.com/api/v2/{secrets['aio username']}/feeds/{feed_key}/data?limit={limit}"
     headers = {'X-AIO-Key': secrets['aio key']}
     try:
@@ -786,18 +810,19 @@ def main():
 
         # Update current time struct and epoch
         get_current_time()
-        last_time_check = time.monotonic()
-        if loop_counter == 1:
-            time_info = format_time_struct(current_time)
-            print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
 
         # Check if display should be in night mode
         try:
+            # Day mode: within operating hours and not in Event mode
             if check_open() and mode != "Event":
                 mode = "Day"
                 display_manager.night_mode_toggle(True)
+
+            # Event mode: within operating hours and in Event mode
             elif check_open() and mode == "Event":
                 pass
+
+            # Night mode: outside operating hours
             else:
                 mode = "Night"
                 display_manager.night_mode_toggle(False)
@@ -918,11 +943,12 @@ def main():
 
         # Refresh display
         display_manager.refresh_display()
-        # Run garbage collection
-        gc.collect()
 
         # Output diagnostics loop
         if loop_counter % 5 == 0 or loop_counter == 1:
+            # Output current time
+            time_info = format_time_struct(current_time)
+            print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
             # Output local diagnostics
             print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
             # Output Adafruit IO diagnostics
@@ -964,6 +990,9 @@ def main():
             else:
                 pass
 
+        # Run garbage collection
+        gc.collect()
+
         # Increment loop and sleep
         # Day mode: 10 seconds
         # Event mode: 50 seconds
@@ -978,7 +1007,12 @@ def main():
             current_minutes = current_time.tm_hour * 60 + current_time.tm_min
             start_minutes = start_time * 60
 
-            if current_minutes < start_minutes:
+            if 6 * 60 <= current_minutes < 7 * 60 + 5:
+                # WEEKEND HANDLER: If current time is between 6:00 AM and 7:05 AM, add a buffer of 5 minutes
+                time_to_sleep = 5
+                print(
+                    f"Current time: {current_time.tm_hour:02}:{current_time.tm_min:02} | Start Time: {start_time}:00 | Sleeping for {time_to_sleep:02}:{00}")
+            elif current_minutes < start_minutes:
                 # If current time is before the start_time, sleep until start_time
                 time_to_sleep = start_minutes - current_minutes
                 print(
