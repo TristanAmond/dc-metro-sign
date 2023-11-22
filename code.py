@@ -194,7 +194,11 @@ def get_weather():
                             )
         weather_json = response.json()
         del response
+    except Exception as e:
+        print("Failed to get weather data from Openweather: {}".format(e))
+        return False
 
+    try:
         # Insert/update icon and current weather data in dict
         weather_data["icon"] = weather_json["current"]["weather"][0]["icon"]
         weather_data["current_temp"] = weather_json["current"]["temp"]
@@ -211,43 +215,51 @@ def get_weather():
 
         # Set daily highest temperature
         global highest_temp
-        # If daily highest temperature hasn't been set or is from a previous day
-        if highest_temp[0] is None or highest_temp[1] != current_time.tm_wday:
-            highest_temp[0] = weather_data["daily_temp_max"]
-            highest_temp[1] = current_time.tm_wday
-        # If stored highest temp is less than new highest temp
-        elif highest_temp[0] < weather_data["daily_temp_max"]:
-            highest_temp[0] = weather_data["daily_temp_max"]
-        # If stored highest temp is greater than new highest temp
-        elif highest_temp[0] > weather_data["daily_temp_max"]:
-            weather_data["daily_temp_max"] = highest_temp[0]
+        if current_time:
+            # If daily highest temperature hasn't been set or is from a previous day
+            if highest_temp[0] is None or highest_temp[1] != current_time.tm_wday:
+                highest_temp[0] = weather_data["daily_temp_max"]
+                highest_temp[1] = current_time.tm_wday
+            # If stored highest temp is less than new highest temp
+            elif highest_temp[0] < weather_data["daily_temp_max"]:
+                highest_temp[0] = weather_data["daily_temp_max"]
+            # If stored highest temp is greater than new highest temp
+            elif highest_temp[0] > weather_data["daily_temp_max"]:
+                weather_data["daily_temp_max"] = highest_temp[0]
 
-        # Set daily lowest temperature
-        global lowest_temp
-        # If daily lowest temperature hasn't been set or is from a previous day
-        if lowest_temp[0] is None or lowest_temp[1] != current_time.tm_wday:
-            lowest_temp[0] = weather_data["daily_temp_min"]
-            lowest_temp[1] = current_time.tm_wday
-        # If daily lowest temp is greater than new lowest temp
-        elif lowest_temp[0] > weather_data["daily_temp_min"]:
-            lowest_temp[0] = weather_data["daily_temp_min"]
-        # If daily lowest temp is less than new lowest temp
-        elif lowest_temp[0] < weather_data["daily_temp_min"]:
-            weather_data["daily_temp_min"] = lowest_temp[0]
+            # Set daily lowest temperature
+            global lowest_temp
+            # If daily lowest temperature hasn't been set or is from a previous day
+            if lowest_temp[0] is None or lowest_temp[1] != current_time.tm_wday:
+                lowest_temp[0] = weather_data["daily_temp_min"]
+                lowest_temp[1] = current_time.tm_wday
+            # If daily lowest temp is greater than new lowest temp
+            elif lowest_temp[0] > weather_data["daily_temp_min"]:
+                lowest_temp[0] = weather_data["daily_temp_min"]
+            # If daily lowest temp is less than new lowest temp
+            elif lowest_temp[0] < weather_data["daily_temp_min"]:
+                weather_data["daily_temp_min"] = lowest_temp[0]
 
-        # print("Daily Lowest Temp: {} | Daily Highest Temp: {}".format(lowest_temp[0], highest_temp[0]))
+        # If current time is not set and no value for highest or lowest temp, set them
+        elif highest_temp[0] is None:
+            highest_temp[0] = weather_data["daily_temp_max"]
+        elif lowest_temp[0] is None:
+            lowest_temp[0] = weather_data["daily_temp_min"]
+
+        # Highest and lowest temp set but no time found, get time on the next round
+        else:
+            pass
 
         # add current temp to historical array
         global current_temp
         current_temp.append(weather_data["current_temp"])
 
-        # return True for updated dict
-        return True
-
     except Exception as e:
         print("Failed to get WEATHER data, retrying\n", e)
         wifi.reset()
-        pass
+        return False
+
+    return True
 
 
 # --- METRO API CALLS ---
@@ -442,9 +454,9 @@ def event_mode_switch(departure_time, diff=60):
     - str: The mode to switch based on the departure time. It can be either "Event" or "Day".
     """
     departure_diff = epoch_diff(departure_time)
-
     # if departure time is within timeframe, switch mode to event
     if 0 < departure_diff < diff:
+        print(f"Departure time: {departure_time} | Switching to EVENT mode")
         return "Event"
     # if departure time is 0 or less than 0, reset mode
     else:
@@ -637,6 +649,7 @@ def epoch_diff(epoch_time):
     global current_time_epoch
     if current_time_epoch is not None:
         difference = abs(epoch_time - current_time_epoch)
+        print(f"Current time epoch: {current_time_epoch} | Event Epoch: {epoch_time} | Diff (sec): {difference} | Diff (min): {round(difference / 60)}")
         return round(difference / 60)
     else:
         return None
@@ -839,9 +852,9 @@ def main():
                     get_weather()
                     # Update weather display component
                     display_manager.update_weather(weather_data)
+                    last_weather_check = time.monotonic()
                 except Exception as e:
                     print(f"Weather error: {e}")
-                last_weather_check = time.monotonic()
 
             # Update train data (default: 15 seconds)
             if last_train_check is None or time.monotonic() > last_train_check + 15:
@@ -872,9 +885,9 @@ def main():
                     next_event = get_next_event()
                     last_event_check = time.monotonic()
                     if next_event is not None:
+                        print("next event: {}".format(next_event))
                         # Switch to event mode if time is within an hour
                         mode = event_mode_switch(next_event['departure_time'])
-                        pass
                     else:
                         print("no event found.")
                 except Exception as e:
@@ -912,17 +925,16 @@ def main():
                 weather = get_weather(weather_data)
                 if weather:
                     last_weather_check = time.monotonic()
-                # Update weather display component
-                display_manager.update_weather(weather_data)
+                    # Update weather display component
+                    display_manager.update_weather(weather_data)
 
             # Calculate time until departure
             if next_event is not None:
                 departure_countdown = epoch_diff(next_event['departure_time'])
+                print("Current time: {}:{} | Departure countdown: {}".format(
+                    current_time.tm_hour, current_time.tm_min, departure_countdown)
+                )
                 if departure_countdown >= 1:
-                    # Test printing TODO remove
-                    print("Current time: {}:{} | Departure countdown: {}".format(
-                        current_time.tm_hour, current_time.tm_min, departure_countdown)
-                    )
                     # update display with headsign/station and time to departure
                     display_manager.update_event(departure_countdown, next_event['departure_train'])
                 # If departure time has passed, switch back to day mode
@@ -945,36 +957,43 @@ def main():
         display_manager.refresh_display()
 
         # Output diagnostics loop
-        if loop_counter % 5 == 0 or loop_counter == 1:
-            # Output current time
-            time_info = format_time_struct(current_time)
-            print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
-            # Output local diagnostics
-            print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
-            # Output Adafruit IO diagnostics
-            if last_train_check is not None:
-                check_diff_seconds = time.monotonic() - last_train_check
-                response = send_feed_data(secrets['aio train'], check_diff_seconds)
+        if loop_counter % 25 == 0 or loop_counter == 1:
+            try:
+                # Output current time
+                time_info = format_time_struct(current_time)
+                print(f"Current time: {time_info} | Weekday: {current_time.tm_wday}")
+                # Output local diagnostics
+                print(f"Loop {loop_counter} | {mode} Mode | Available memory: {gc.mem_free()} bytes")
+            except Exception as e:
+                print(f"Time/Loop Calculation Error: {e}")
+
+            try:
+                # Output Adafruit IO diagnostics
+                if last_train_check is not None:
+                    check_diff_seconds = time.monotonic() - last_train_check
+                    response = send_feed_data(secrets['aio train'], check_diff_seconds)
+                    if response is not None and response[0] != 200:
+                        print(f"Last Train Check: {response[1]}")
+                if last_plane_check is not None:
+                    check_diff_seconds = time.monotonic() - last_plane_check
+                    response = send_feed_data(secrets['aio plane'], check_diff_seconds / 60)
+                    if response is not None and response[0] != 200:
+                        print(f"Nearest Plane: {response[1]}")
+                if last_event_check is not None:
+                    check_diff_seconds = time.monotonic() - last_event_check
+                    response = send_feed_data(secrets['aio event'], check_diff_seconds / 60)
+                    if response is not None and response[0] != 200:
+                        print(f"Last Event Check: {response[1]}")
+                if last_headline_check is not None:
+                    check_diff_seconds = time.monotonic() - last_headline_check
+                    response = send_feed_data(secrets['aio headline'], check_diff_seconds / 60)
+                    if response is not None and response[0] != 200:
+                        print(f"Headline: {response[1]}")
+                response = send_feed_data(secrets['aio loop counter'], loop_counter)
                 if response is not None and response[0] != 200:
-                    print(f"Last Train Check: {response[1]}")
-            if last_plane_check is not None:
-                check_diff_seconds = time.monotonic() - last_plane_check
-                response = send_feed_data(secrets['aio plane'], check_diff_seconds / 60)
-                if response is not None and response[0] != 200:
-                    print(f"Nearest Plane: {response[1]}")
-            if last_event_check is not None:
-                check_diff_seconds = time.monotonic() - last_event_check
-                response = send_feed_data(secrets['aio event'], check_diff_seconds / 60)
-                if response is not None and response[0] != 200:
-                    print(f"Last Event Check: {response[1]}")
-            if last_headline_check is not None:
-                check_diff_seconds = time.monotonic() - last_headline_check
-                response = send_feed_data(secrets['aio headline'], check_diff_seconds / 60)
-                if response is not None and response[0] != 200:
-                    print(f"Headline: {response[1]}")
-            response = send_feed_data(secrets['aio loop counter'], loop_counter)
-            if response is not None and response[0] != 200:
-                print(f"Loop Counter: {response[1]}")
+                    print(f"Loop Counter: {response[1]}")
+            except Exception as e:
+                print(f"Adafruit IO Error: {e}")
 
             # Check Adafruit IO for updated start time
             try:

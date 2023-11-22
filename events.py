@@ -205,8 +205,16 @@ def write_to_json(next_event):
         print("Error writing to {}".format(filepath))
 
 
-def convert_struct_to_epoch(struct):
-    return parser.parse(struct).timestamp()
+def convert_struct_to_epoch(time_struct, timezone):
+    # Create a timezone-aware datetime object using the specified timezone
+    dt = datetime.datetime.fromtimestamp(time.mktime(time_struct))
+    tz = pytz.timezone(timezone)
+    dt = tz.localize(dt)
+
+    # Convert the timezone-aware datetime object to epoch time
+    epoch_time = dt.timestamp()
+
+    return epoch_time
 
 
 # --- MAIN ---
