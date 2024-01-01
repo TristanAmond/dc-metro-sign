@@ -24,6 +24,18 @@ metro_green = 0x49742a
 scroll_delay = 0.03
 
 
+# helper function to assign color to minutes labels
+def get_minutes_color(minutes):
+    try:
+        if minutes == "ARR" or minutes == "BRD":
+            return metro_red
+        else:
+            return metro_orange
+    except ValueError as e:
+        print("Value Error: {}".format(e))
+        return metro_orange
+
+
 class display_manager(displayio.Group):
     def __init__(
             self,
@@ -188,17 +200,6 @@ class display_manager(displayio.Group):
                 self._icon_sprite[0] = (row * 2) + column
                 self._icon_group.append(self._icon_sprite)
 
-    # helper function to assign color to minutes labels
-    def get_minutes_color(self, minutes):
-        try:
-            if minutes == "ARR" or minutes == "BRD":
-                return metro_red
-            else:
-                return metro_orange
-        except ValueError as e:
-            print("Value Error: {}".format(e))
-            return metro_orange
-
     # update temperature text, trend, and max/min
     # input is a weather dict
     def update_weather(self, weather):
@@ -237,7 +238,6 @@ class display_manager(displayio.Group):
 
     # update train destination text and time to arrival
     # input is a list of train objects
-    # TODO abstract default and error handling to support any station
     def update_trains(self, trains, historical_trains):
         try:
             if trains[0] is not None:
@@ -247,11 +247,11 @@ class display_manager(displayio.Group):
                 if trains[0].destination_code is not "A15":
                     self.top_row_train_text.color = 0xFFFFFF
                 else:
-                    self.top_row_train_text.color = self.get_minutes_color(trains[0].minutes)
+                    self.top_row_train_text.color = get_minutes_color(trains[0].minutes)
 
                 # set min and min text colors
                 self.top_row_train_min.text = trains[0].minutes
-                self.top_row_train_min.color = self.get_minutes_color(trains[0].minutes)
+                self.top_row_train_min.color = get_minutes_color(trains[0].minutes)
 
             # no A train data
             elif historical_trains[0] is not None:
@@ -268,11 +268,11 @@ class display_manager(displayio.Group):
                 if trains[1].destination_code is not "B11":
                     self.bottom_row_train_text.color = 0xFFFFFF
                 else:
-                    self.bottom_row_train_text.color = self.get_minutes_color(trains[1].minutes)
+                    self.bottom_row_train_text.color = get_minutes_color(trains[1].minutes)
 
                 # set min and min text colors
                 self.bottom_row_train_min.text = trains[1].minutes
-                self.bottom_row_train_min.color = self.get_minutes_color(trains[1].minutes)
+                self.bottom_row_train_min.color = get_minutes_color(trains[1].minutes)
 
             # no B train data
             elif historical_trains[1] is not None:

@@ -26,6 +26,12 @@ except ImportError:
 station_code = secrets["station code"]
 historical_trains = [None, None]
 
+current_station_index = secrets["station index"]
+# import RD_Ordered.txt to get train order as array of strings
+with open("/stations/RD_Ordered.txt", "r") as f:
+    train_order = f.read().splitlines()
+    f.close()
+
 # Stores nearest plane data
 nearest_plane = None
 
@@ -268,81 +274,49 @@ def get_weather():
 # input is station code from secrets.py, and a historical_trains array
 def get_trains():
     """
-    Retrieves train data from the WMATA API based on the input station code.
-
-    This function queries the WMATA API using the provided station code and retrieves train prediction data for the specified station. It sets up two train directions: A and B, and assigns train objects to these directions based on the prediction data. It then updates the historical trains with the new train objects if they are found. Finally, it prints the destination name and minutes for each train, and returns a list of the train objects.
+    Retrieves the train predictions for a specific station.
 
     Returns:
-        List[Train]: A list of train objects representing the predicted train data.
-    """
-    global station_code
-    global historical_trains
-    json_data = None
-    a_train = None
-    b_train = None
+        A list of Train objects representing the predicted arrival times for eastbound and westbound trains.
+        Each Train object contains the destination, destination name, destination code, and estimated arrival time in minutes.
 
+    Raises:
+        Exception: If there is an error retrieving the WMATA data.
+    """
     try:
-        # query WMATA API with input StationCode
-        URL = 'https://api.wmata.com/StationPrediction.svc/json/GetPrediction/'
-        payload = {'api_key': secrets['wmata api key']}
-        response = wifi.get(URL + station_code, headers=payload)
+        response = wifi.get('https://api.wmata.com/StationPrediction.svc/json/GetPrediction/' + station_code, headers={'api_key': secrets['wmata api key']})
         json_data = response.json()
-        del response
     except Exception as e:
         print("Failed to get WMATA data, retrying\n", e)
         wifi.reset()
 
-    if json_data is not None:
-        # Set up two train directions (A station code and B station code)
-        try:
-            for item in json_data['Trains']:
-                if item['Line'] is not "RD":
-                    pass
-                # Handles A direction trains
-                if item['DestinationCode'][0] == "A":
-                    # If a train has not been assigned, create new Train object and assign
-                    if a_train is None:
-                        a_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
-                                        item['Min'])
-                    else:
-                        pass
-                # Handles B direction trains
-                elif item['DestinationCode'][0] == "B":
-                    # # If b train has not been assigned, create new Train object and assign
-                    if b_train is None:
-                        b_train = Train(item['Destination'], item['DestinationName'], item['DestinationCode'],
-                                        item['Min'])
-                    else:
-                        pass
-                # For neither A nor B direction trains, pass
-                else:
-                    pass
+    east_train = None
+    west_train = None
+    for train in json_data.get('Trains', []):
+        if train['Line'] != "RD":
+            continue
+        destination_index = train_order.index(train['DestinationName'])
+        if destination_index < current_station_index:
+            if east_train is None:
+                east_train = Train(train['Destination'], train['DestinationName'], train['DestinationCode'], train['Min'])
+        elif destination_index > current_station_index:
+            if west_train is None:
+                west_train = Train(train['Destination'], train['DestinationName'], train['DestinationCode'], train['Min'])
 
-        except Exception as e:
-            print("Error accessing the WMATA API: ", e)
-            pass
-    else:
-        print("Failed to get response from WMATA API")
-        pass
+    if east_train is not None:
+        historical_trains[0] = east_train
+    elif east_train is None and historical_trains[0] is not None:
+        east_train = historical_trains[0]
+    if west_train is not None:
+        historical_trains[1] = west_train
+    elif west_train is None and historical_trains[1] is not None:
+        west_train = historical_trains[1]
 
-    # If new a train is found, replace historical a train
-    if a_train is not None:
-        historical_trains[0] = a_train
-    elif a_train is None and historical_trains[0] is not None:
-        a_train = historical_trains[0]
-    # If new b train is found, replace historical b train
-    if b_train is not None:
-        historical_trains[1] = b_train
-    elif b_train is None and historical_trains[1] is not None:
-        b_train = historical_trains[1]
-
-    trains = [a_train, b_train]
-    '''try:
-        for item in trains:
-            print("{}: {}".format(item.destination_name, item.minutes))
-    except Exception as e:
-        print(e)
-        pass'''
+    trains = [east_train, west_train]
+    '''
+        for train in trains:
+        print("{}: {}".format(train.destination, train.minutes))
+    '''
     return trains
 
 
@@ -649,7 +623,8 @@ def epoch_diff(epoch_time):
     global current_time_epoch
     if current_time_epoch is not None:
         difference = abs(epoch_time - current_time_epoch)
-        print(f"Current time epoch: {current_time_epoch} | Event Epoch: {epoch_time} | Diff (sec): {difference} | Diff (min): {round(difference / 60)}")
+        print(
+            f"Current time epoch: {current_time_epoch} | Event Epoch: {epoch_time} | Diff (sec): {difference} | Diff (min): {round(difference / 60)}")
         return round(difference / 60)
     else:
         return None
@@ -810,16 +785,6 @@ def main():
     mode = "Day"
 
     while True:
-
-        # Check Adafruit IO for RESET command
-        updated_reset_status, updated_reset = get_feed_data(secrets['aio reset'])
-        if updated_reset_status == 200 and updated_reset[0]['value'] == 1:
-            print("Resetting Now: {}".format(updated_reset))
-            send_feed_data(secrets['aio reset'], 0)
-            time.sleep(3)
-            microcontroller.reset()
-        else:
-            pass
 
         # Update current time struct and epoch
         get_current_time()
@@ -994,20 +959,6 @@ def main():
                     print(f"Loop Counter: {response[1]}")
             except Exception as e:
                 print(f"Adafruit IO Error: {e}")
-
-            # Check Adafruit IO for updated start time
-            try:
-                updated_start_time_status, updated_start_time = get_feed_data(secrets['aio start time'])
-            except Exception as e:
-                print(f"Failed to get start time: {e}")
-                updated_start_time_status, updated_start_time = None, None
-            if (updated_start_time_status is not None and updated_start_time_status == 200
-                    and updated_start_time is not None and int(updated_start_time[0]['value']) != start_time):
-                start_time = updated_start_time[0]['value']
-
-                print(f"Updated start time: {updated_start_time[0]['value']}")
-            else:
-                pass
 
         # Run garbage collection
         gc.collect()
