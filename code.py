@@ -14,6 +14,11 @@ import display_manager
 
 print(f"All imports loaded | Available memory: {gc.mem_free()} bytes")
 
+# --- FUNCTIONS TOGGLES ---
+ENABLE_PLANES = True
+ENABLE_EVENTS = False
+ENABLE_HEADLINES = False
+
 # --- CONSTANTS SETUP ---
 
 try:
@@ -94,10 +99,9 @@ print(f"WiFi loaded | Available memory: {gc.mem_free()} bytes")
 # --- CLASSES ---
 
 class Train:
-    def __init__(self, destination, destination_name, destination_code, minutes):
+    def __init__(self, destination, destination_name, minutes):
         self.destination = destination
         self.destination_name = destination_name
-        self.destination_code = destination_code
         self.minutes = minutes
 
     def __getitem__(self, key):
@@ -105,8 +109,6 @@ class Train:
             return self.destination
         elif key == 'destination_name':
             return self.destination_name
-        elif key == 'destination_code':
-            return self.destination_code
         elif key == 'minutes':
             return self.minutes
         else:
@@ -283,41 +285,58 @@ def get_trains():
     Raises:
         Exception: If there is an error retrieving the WMATA data.
     """
+    global station_code, current_station_index, train_order, historical_trains
+
     try:
         response = wifi.get('https://api.wmata.com/StationPrediction.svc/json/GetPrediction/' + station_code, headers={'api_key': secrets['wmata api key']})
         json_data = response.json()
     except Exception as e:
         print("Failed to get WMATA data, retrying\n", e)
         wifi.reset()
+        return historical_trains  # Return historical data if API call fails
 
     east_train = None
     west_train = None
-    for train in json_data.get('Trains', []):
-        if train['Line'] != "RD":
-            continue
-        destination_index = train_order.index(train['DestinationName'])
-        if destination_index < current_station_index:
-            if east_train is None:
-                east_train = Train(train['Destination'], train['DestinationName'], train['DestinationCode'], train['Min'])
-        elif destination_index > current_station_index:
-            if west_train is None:
-                west_train = Train(train['Destination'], train['DestinationName'], train['DestinationCode'], train['Min'])
 
-    if east_train is not None:
-        historical_trains[0] = east_train
-    elif east_train is None and historical_trains[0] is not None:
-        east_train = historical_trains[0]
-    if west_train is not None:
-        historical_trains[1] = west_train
-    elif west_train is None and historical_trains[1] is not None:
-        west_train = historical_trains[1]
+    try:
+        trains_data = json_data.get('Trains', [])
+        if not isinstance(trains_data, list):
+            raise ValueError("Unexpected format for Trains data")
 
-    trains = [east_train, west_train]
+        for train in trains_data:
+            if train['Line'] != "RD":
+                continue
+            destination_index = train_order.index(train['DestinationName'])
+            if destination_index < current_station_index:
+                #print("EAST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
+                if east_train is None:
+                    east_train = Train(train['Destination'], train['DestinationName'], train['Min'])
+            elif destination_index > current_station_index:
+                #print("WEST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
+                if west_train is None:
+                    west_train = Train(train['Destination'], train['DestinationName'], train['Min'])
+
+        if east_train is not None:
+            historical_trains[0] = east_train
+        elif east_train is None and historical_trains[0] is not None:
+            east_train = historical_trains[0]
+        if west_train is not None:
+            historical_trains[1] = west_train
+        elif west_train is None and historical_trains[1] is not None:
+            west_train = historical_trains[1]
+
+        trains = [east_train, west_train]
+
+    except Exception as e:
+        print(f"Error processing train data: {e}")
+        return historical_trains  # Return historical data in case of processing error
+
     '''
-        for train in trains:
+    for train in trains:
         print("{}: {}".format(train.destination, train.minutes))
     '''
     return trains
+
 
 
 # --- PLANE API CALLS ---
@@ -832,7 +851,7 @@ def main():
                 last_train_check = time.monotonic()
 
             # Update plane data (default: 5 minutes)
-            if last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5:
+            if ENABLE_PLANES and (last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5):
                 try:
                     get_nearest_plane()
                     last_plane_check = time.monotonic()
@@ -844,7 +863,7 @@ def main():
                     nearest_plane = None
 
             # Update event data (default: 5 minutes)
-            if last_event_check is None or time.monotonic() > last_event_check + 60 * 5:
+            if ENABLE_EVENTS and (last_event_check is None or time.monotonic() > last_event_check + 60 * 5):
                 try:
                     # Check for event departure
                     next_event = get_next_event()
@@ -859,7 +878,7 @@ def main():
                     print(f"Event error: {e}")
 
             # Update top headline (default: 12 minutes)
-            if last_headline_check is None or time.monotonic() > last_headline_check + 60 * 12:
+            if ENABLE_HEADLINES and (last_headline_check is None or time.monotonic() > last_headline_check + 60 * 12):
                 global current_headline
                 # Check for a new headline
                 try:
