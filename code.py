@@ -4,25 +4,25 @@ import time
 import busio
 from digitalio import DigitalInOut
 import neopixel
-import microcontroller
 
 from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_esp32spi import adafruit_esp32spi_wifimanager
 
 import display_manager
+from api_manager import APIManager
 
 print(f"All imports loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- FUNCTIONS TOGGLES ---
-ENABLE_PLANES = True
+ENABLE_PLANES = False
 ENABLE_EVENTS = False
 ENABLE_HEADLINES = False
 
 # --- CONSTANTS SETUP ---
 
 try:
-    from secrets import secrets
+    from secrets import secrets # type: ignore
 except ImportError:
     print("Wifi + constants are kept in secrets.py, please add them there!")
     raise
@@ -95,6 +95,8 @@ wifi.timeout = 20
 gc.collect()
 print(f"WiFi loaded | Available memory: {gc.mem_free()} bytes")
 
+# --- API MANAGER SETUP ---
+api = APIManager(wifi, secrets)
 
 # --- CLASSES ---
 
@@ -806,7 +808,23 @@ def main():
     while True:
 
         # Update current time struct and epoch
-        get_current_time()
+        try:
+            if not api.get_current_time():
+                print("Failed to get current time, using previous or fallback values")
+            
+            # Update the global current_time to match api.current_time
+            current_time = api.current_time
+            
+            # Ensure we have valid time data before proceeding
+            if not hasattr(current_time, 'tm_min') or not hasattr(current_time, 'tm_wday'):
+                print("Invalid time data, skipping this iteration")
+                time.sleep(5)  # Wait before retrying
+                continue
+                
+        except Exception as e:
+            print(f"Time update error: {e}")
+            time.sleep(5)  # Wait before retrying
+            continue
 
         # Check if display should be in night mode
         try:
@@ -833,40 +851,83 @@ def main():
             # Fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
                 try:
-                    get_weather()
-                    # Update weather display component
-                    display_manager.update_weather(weather_data)
-                    last_weather_check = time.monotonic()
+                    weather_json = api.get_weather()
+                    if weather_json:
+                        weather_data = {
+                            "icon": weather_json["current"]["weather"][0]["icon"],
+                            "current_temp": weather_json["current"]["temp"],
+                            "current_feels_like": weather_json["current"]["feels_like"],
+                            "daily_temp_min": weather_json["daily"][0]["temp"]["min"],
+                            "daily_temp_max": weather_json["daily"][0]["temp"]["max"],
+                            "hourly_next_temp": weather_json["hourly"][2]["temp"],
+                            "hourly_feels_like": weather_json["hourly"][2]["feels_like"]
+                        }
+                        
+                        display_manager.update_weather(weather_data)
+                        del weather_json  # Clean up the large JSON object
+                        gc.collect()
+                        last_weather_check = time.monotonic()
+                        
                 except Exception as e:
                     print(f"Weather error: {e}")
 
             # Update train data (default: 15 seconds)
             if last_train_check is None or time.monotonic() > last_train_check + 15:
                 try:
-                    trains = get_trains()
-                    # Update train display component
-                    display_manager.update_trains(trains, historical_trains)
+                    trains_json = api.get_trains(station_code)
+                    if trains_json and 'Trains' in trains_json:
+                        east_train = None
+                        west_train = None
+                        
+                        for train in trains_json['Trains']:
+                            if train['Line'] != "RD":
+                                continue
+                                
+                            dest_index = train_order.index(train['DestinationName'])
+                            if dest_index < current_station_index and east_train is None:
+                                east_train = {'dest': train['Destination'], 
+                                            'name': train['DestinationName'],
+                                            'min': train['Min']}
+                            elif dest_index > current_station_index and west_train is None:
+                                west_train = {'dest': train['Destination'],
+                                            'name': train['DestinationName'],
+                                            'min': train['Min']}
+                                
+                            if east_train and west_train:
+                                break  # Exit loop early if we have both trains
+                        
+                        # Update display with trains and historical data
+                        display_manager.update_trains([east_train, west_train], historical_trains)
+                        
+                        # Update historical data
+                        if east_train:
+                            historical_trains[0] = east_train
+                        if west_train:
+                            historical_trains[1] = west_train
+                            
+                    gc.collect()  # Force garbage collection after processing
+                    last_train_check = time.monotonic()
                 except Exception as e:
                     print(f"Train error: {e}")
-                last_train_check = time.monotonic()
 
             # Update plane data (default: 5 minutes)
             if ENABLE_PLANES and (last_plane_check is None or time.monotonic() > last_plane_check + 60 * 5):
                 try:
-                    get_nearest_plane()
+                    plane_data = api.get_plane_data()
+                    if plane_data is not None:
+                        notification_queue.append(plane_data.get_plane_string())
+                        nearest_plane = None
+                        del plane_data  # Free the plane data
+                        gc.collect()  # Force collection after plane processing
                     last_plane_check = time.monotonic()
                 except Exception as e:
                     print(f"Plane error: {e}")
-                # Push plane to notification queue if within 2 miles
-                if nearest_plane is not None:
-                    notification_queue.append(nearest_plane.get_plane_string())
-                    nearest_plane = None
 
             # Update event data (default: 5 minutes)
             if ENABLE_EVENTS and (last_event_check is None or time.monotonic() > last_event_check + 60 * 5):
                 try:
                     # Check for event departure
-                    next_event = get_next_event()
+                    next_event = api.get_event_data()
                     last_event_check = time.monotonic()
                     if next_event is not None:
                         print("next event: {}".format(next_event))
@@ -882,21 +943,14 @@ def main():
                 global current_headline
                 # Check for a new headline
                 try:
-                    headline = get_headline()
-                except Exception as e:
-                    print(f"Headline retrieval error: {e}")
-                    headline = None
-
-                # If a new headline exists, push it to the notification queue
-                if headline is not None:
-                    try:
+                    headline = api.get_news()
+                    if headline is not None:
                         notification_queue.append(headline.get_headline_string())
-                    except Exception as e:
-                        print(f"Headline notification error: {e}")
-                # No / No new headline
-                else:
-                    pass
-                last_headline_check = time.monotonic()
+                        del headline  # Free the headline data
+                        gc.collect()  # Force collection after headline processing
+                    last_headline_check = time.monotonic()
+                except Exception as e:
+                    print(f"Headline error: {e}")
 
             # Push current time to the top of the notification queue at the top of the hour
             if current_time.tm_min == 0 and current_time.tm_sec <= 15:
@@ -906,7 +960,7 @@ def main():
         if mode is "Event":
             # Fetch weather data on start and recurring (default: 10 minutes)
             if last_weather_check is None or time.monotonic() > last_weather_check + 60 * 10:
-                weather = get_weather(weather_data)
+                weather = api.get_weather(weather_data)
                 if weather:
                     last_weather_check = time.monotonic()
                     # Update weather display component
@@ -955,25 +1009,26 @@ def main():
                 # Output Adafruit IO diagnostics
                 if last_train_check is not None:
                     check_diff_seconds = time.monotonic() - last_train_check
-                    response = send_feed_data(secrets['aio train'], check_diff_seconds)
+                    response = api.send_feed_data(secrets['aio train'], check_diff_seconds)
                     if response is not None and response[0] != 200:
                         print(f"Last Train Check: {response[1]}")
                 if last_plane_check is not None:
                     check_diff_seconds = time.monotonic() - last_plane_check
-                    response = send_feed_data(secrets['aio plane'], check_diff_seconds / 60)
+                    response = api.send_feed_data(secrets['aio plane'], check_diff_seconds / 60)
                     if response is not None and response[0] != 200:
                         print(f"Nearest Plane: {response[1]}")
                 if last_event_check is not None:
                     check_diff_seconds = time.monotonic() - last_event_check
-                    response = send_feed_data(secrets['aio event'], check_diff_seconds / 60)
+                    response = api.send_feed_data(secrets['aio event'], check_diff_seconds / 60)
                     if response is not None and response[0] != 200:
                         print(f"Last Event Check: {response[1]}")
                 if last_headline_check is not None:
                     check_diff_seconds = time.monotonic() - last_headline_check
-                    response = send_feed_data(secrets['aio headline'], check_diff_seconds / 60)
+                    response = api.send_feed_data(secrets['aio headline'], check_diff_seconds / 60)
                     if response is not None and response[0] != 200:
                         print(f"Headline: {response[1]}")
-                response = send_feed_data(secrets['aio loop counter'], loop_counter)
+                response = api.send_feed_data(secrets['aio loop counter'], loop_counter)
+                gc.collect()  # Add collection after sending all feed data
                 if response is not None and response[0] != 200:
                     print(f"Loop Counter: {response[1]}")
             except Exception as e:
@@ -1017,3 +1072,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ # type: ignore

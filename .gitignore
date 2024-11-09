@@ -1,4 +1,5 @@
 # .gitignore
 secrets.py
 .DS_STORE
-.idea
+*.idea
+*.pyc

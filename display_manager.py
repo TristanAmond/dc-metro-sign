@@ -7,6 +7,7 @@ import displayio
 import terminalio
 from adafruit_display_text.label import Label
 from adafruit_bitmap_font import bitmap_font
+import gc
 
 cwd = ("/" + __file__).rsplit("/", 1)[0]
 
@@ -22,6 +23,22 @@ metro_green = 0x49742a
 
 # custom scroll delay for scroll_text
 scroll_delay = 0.03
+
+# Pre-define common strings
+TRAIN_NO_TRAINS = "No trains"
+TRAIN_ARR = "ARR"
+TRAIN_BRD = "BRD"
+
+# Cache color values
+COLORS = {
+    'orange': metro_orange,
+    'red': metro_red,
+    'blue': 0x1e81b0,
+    'white': 0xFFFFFF
+}
+
+# Use byte strings for icon mapping
+ICON_MAP = b'\x00\x01\x02\x03\x04\x04\x05\x05\x06\x06\x07\x08\x09\x09\x0A\x0A\x0B\x0B'
 
 
 class display_manager(displayio.Group):
@@ -202,87 +219,118 @@ class display_manager(displayio.Group):
     # update temperature text, trend, and max/min
     # input is a weather dict
     def update_weather(self, weather):
-        if weather:
-            # set the icon
-            self.set_icon(weather["icon"])
-
-            # set the temperature
-            self.temp_text.text = "%d" % weather["current_temp"]
-            self.min_temp_text.text = "%d" % weather["daily_temp_min"]
-            self.max_temp_text.text = "%d" % weather["daily_temp_max"]
-
-            # set temperature trend
-            # if the temperature change is more than 1 degree
-            temp_diff_default = 1
-            temp_diff = weather["hourly_next_temp"] - weather["current_temp"]
-            if temp_diff > 0 and temp_diff > temp_diff_default:
-                # comma is increase arrow
-                self.temp_trend_icon.text = ","
-                self.temp_trend_icon.color = metro_red
-                self.temp_trend_icon.y = self.row1 - 6
-                self._temp_trend_group.hidden = False
-
-            elif temp_diff < 0 and abs(temp_diff) > temp_diff_default:
-                # period is decrease arrow
-                self.temp_trend_icon.text = "."
-                self.temp_trend_icon.color = 0x1e81b0
-                self.temp_trend_icon.y = self.row1 - 6
-                self._temp_trend_group.hidden = False
-
-            else:
-                self._temp_trend_group.hidden = True
-        # No weather_data
-        else:
+        """Updates weather display with current conditions"""
+        if not weather:
             self.temp_text.text = "..."
+            return
+        
+        # Update temperature values
+        self.temp_text.text = str(int(weather["current_temp"]))
+        self.min_temp_text.text = str(int(weather["daily_temp_min"]))
+        self.max_temp_text.text = str(int(weather["daily_temp_max"]))
+        
+        # Map OpenWeather icon code to our sprite sheet index
+        icon_map = {
+            "01d": 0,  # clear sky day
+            "01n": 1,  # clear sky night
+            "02d": 2,  # few clouds day
+            "02n": 3,  # few clouds night
+            "03d": 4,  # scattered clouds
+            "03n": 4,  # scattered clouds
+            "04d": 5,  # broken clouds
+            "04n": 5,  # broken clouds
+            "09d": 6,  # shower rain
+            "09n": 6,  # shower rain
+            "10d": 7,  # rain day
+            "10n": 8,  # rain night
+            "11d": 9,  # thunderstorm
+            "11n": 9,  # thunderstorm
+            "13d": 10, # snow
+            "13n": 10, # snow
+            "50d": 11, # mist
+            "50n": 11, # mist
+        }
+        
+        # Update icon if we have one in the icon group
+        if len(self._icon_group) > 0:
+            icon_index = icon_map.get(weather["icon"], 0)
+            self._icon_sprite[0] = icon_index
+        else:
+            # First time setup - add the sprite to the group
+            icon_index = icon_map.get(weather["icon"], 0)
+            self._icon_sprite[0] = icon_index
+            self._icon_group.append(self._icon_sprite)
+        
+        # Update temperature trend
+        temp_diff = weather["hourly_next_temp"] - weather["current_temp"]
+        self._temp_trend_group.hidden = abs(temp_diff) <= 1
+        
+        if not self._temp_trend_group.hidden:
+            self.temp_trend_icon.text = "," if temp_diff > 0 else "."
+            self.temp_trend_icon.color = metro_red if temp_diff > 0 else 0x1e81b0
+            self.temp_trend_icon.y = self.row1 - 6
+        
+        # Ensure icon group is visible
+        self._icon_group.hidden = False
+        
+        gc.collect()  # Add collection after weather updates
 
     # update train destination text and time to arrival
     # input is a list of train objects
     # TODO abstract default and error handling to support any station
     def update_trains(self, trains, historical_trains):
-        try:
-            if trains[0] is not None:
-                self.top_row_train_text.text = trains[0].destination
-
-                # Set color based on destination and minutes
-                if trains[0].destination == "Shady Grv" or trains[0].minutes in ["ARR", "BRD"]:
-                    self.top_row_train_text.color = self.get_minutes_color(trains[0].minutes)
-                else:
-                    self.top_row_train_text.color = 0xFFFFFF
-
-                # Set min and min text colors
-                self.top_row_train_min.text = trains[0].minutes
-                self.top_row_train_min.color = self.get_minutes_color(trains[0].minutes)
-
-            elif historical_trains[0] is not None:
-                self.top_row_train_text.text = historical_trains[0].destination
-                self.top_row_train_min.text = historical_trains[0].minutes
-                self.top_row_train_min.color = 0xFFFFFF
-            else:
-                self.top_row_train_min.text = "NULL"
-
-            if trains[1] is not None:
-                self.bottom_row_train_text.text = trains[1].destination
-
-                # Set color based on destination and minutes
-                if trains[1].destination == "Glenmont" or trains[1].minutes in ["ARR", "BRD"]:
-                    self.bottom_row_train_text.color = self.get_minutes_color(trains[1].minutes)
-                else:
-                    self.bottom_row_train_text.color = 0xFFFFFF
-
-                # Set min and min text colors
-                self.bottom_row_train_min.text = trains[1].minutes
-                self.bottom_row_train_min.color = self.get_minutes_color(trains[1].minutes)
-
-            elif historical_trains[1] is not None:
-                self.bottom_row_train_text.text = historical_trains[1].destination
-                self.bottom_row_train_min.text = historical_trains[1].minutes
-                self.bottom_row_train_min.color = 0xFFFFFF
-            else:
-                self.bottom_row_train_min.text = "NULL"
-
-        except TypeError as e:
-            print(e)
-
+        """
+        Updates the train display with current train predictions
+        Args:
+            trains: List containing two Train objects [eastbound, westbound]
+            historical_trains: List containing historical train data
+        """
+        if not trains:
+            return
+        
+        # Update eastbound train
+        if trains[0]:
+            self.top_row_train_text.text = trains[0]['dest']
+            self.top_row_train_min.text = trains[0]['min']
+            # Set text color based on destination
+            text_color = (metro_orange if trains[0]['dest'] in ["Shady Grv", "Glenmont"] else 0xFFFFFF)
+            # Set minutes color based on arrival status
+            min_color = metro_red if trains[0]['min'] in ["ARR", "BRD"] else metro_orange
+            self.top_row_train_text.color = text_color
+            self.top_row_train_min.color = min_color
+        elif historical_trains[0]:
+            self.top_row_train_text.text = historical_trains[0]['dest']
+            self.top_row_train_min.text = historical_trains[0]['min']
+            text_color = (metro_orange if historical_trains[0]['dest'] in ["Shady Grv", "Glenmont"] else 0xFFFFFF)
+            min_color = metro_red if historical_trains[0]['min'] in ["ARR", "BRD"] else metro_orange
+            self.top_row_train_text.color = text_color
+            self.top_row_train_min.color = min_color
+        else:
+            self.top_row_train_text.text = "No trains"
+            self.top_row_train_min.text = ""
+            self.top_row_train_text.color = metro_orange
+            self.top_row_train_min.color = metro_orange
+        
+        # Update westbound train
+        if trains[1]:
+            self.bottom_row_train_text.text = trains[1]['dest']
+            self.bottom_row_train_min.text = trains[1]['min']
+            text_color = (metro_orange if trains[1]['dest'] in ["Shady Grv", "Glenmont"] else 0xFFFFFF)
+            min_color = metro_red if trains[1]['min'] in ["ARR", "BRD"] else metro_orange
+            self.bottom_row_train_text.color = text_color
+            self.bottom_row_train_min.color = min_color
+        elif historical_trains[1]:
+            self.bottom_row_train_text.text = historical_trains[1]['dest']
+            self.bottom_row_train_min.text = historical_trains[1]['min']
+            text_color = (metro_orange if historical_trains[1]['dest'] in ["Shady Grv", "Glenmont"] else 0xFFFFFF)
+            min_color = metro_red if historical_trains[1]['min'] in ["ARR", "BRD"] else metro_orange
+            self.bottom_row_train_text.color = text_color
+            self.bottom_row_train_min.color = min_color
+        else:
+            self.bottom_row_train_text.text = "No trains"
+            self.bottom_row_train_min.text = ""
+            self.bottom_row_train_text.color = metro_orange
+            self.bottom_row_train_min.color = metro_orange
 
     def update_event(self, station, departure_countdown):
         # station is Shady Grove
@@ -323,20 +371,27 @@ class display_manager(displayio.Group):
 
     # use \n newline to access bottom row
     def scroll_text(self, label_text):
-        self._scrolling_group.x = self.display.width
-        self.scrolling_label.text = label_text
-        self._weather_group.hidden = True
-        self._train_board_group.hidden = True
-        self._scrolling_group.hidden = False
+        try:
+            self._scrolling_group.x = self.display.width
+            self.scrolling_label.text = label_text
+            self._weather_group.hidden = True
+            self._train_board_group.hidden = True
+            self._scrolling_group.hidden = False
 
-        for _ in range(self.display.width + len(label_text) * 5):
-            self._scrolling_group.x = self._scrolling_group.x - 1
-            time.sleep(scroll_delay)
-        self._scrolling_group.hidden = True
-        self._weather_group.hidden = False
-        self._train_board_group.hidden = False
-        self.refresh_display()
+            for _ in range(self.display.width + len(label_text) * 5):
+                self._scrolling_group.x = self._scrolling_group.x - 1
+                time.sleep(scroll_delay)
+            self._scrolling_group.hidden = True
+            self._weather_group.hidden = False
+            self._train_board_group.hidden = False
+            self.refresh_display()
+            gc.collect()  # Add collection after scrolling completes
+        except Exception as e:
+            print(f"Scroll error: {e}")
 
     # refresh the root group on the display
     def refresh_display(self):
-        self.display.show(self.root_group)
+        """
+        Refreshes the display with the current content.
+        """
+        self.display.root_group = self.root_group
