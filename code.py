@@ -1,3 +1,4 @@
+ # type: ignore
 import board
 import gc
 import time
@@ -15,7 +16,7 @@ import display_manager
 print(f"All imports loaded | Available memory: {gc.mem_free()} bytes")
 
 # --- FUNCTIONS TOGGLES ---
-ENABLE_PLANES = True
+ENABLE_PLANES = False
 ENABLE_EVENTS = False
 ENABLE_HEADLINES = False
 
@@ -306,15 +307,20 @@ def get_trains():
         for train in trains_data:
             if train['Line'] != "RD":
                 continue
-            destination_index = train_order.index(train['DestinationName'])
-            if destination_index < current_station_index:
-                #print("EAST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
-                if east_train is None:
-                    east_train = Train(train['Destination'], train['DestinationName'], train['Min'])
-            elif destination_index > current_station_index:
-                #print("WEST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
-                if west_train is None:
-                    west_train = Train(train['Destination'], train['DestinationName'], train['Min'])
+            try:
+                #print("Destination: ", train['Destination'], " | DestinationName: ", train['DestinationName'])
+                destination_index = train_order.index(train['Destination'])
+                if destination_index < current_station_index:
+                    #print("EAST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
+                    if east_train is None:
+                        east_train = Train(train['Destination'], train['DestinationName'], train['Min'])
+                elif destination_index > current_station_index:
+                    #print("WEST train: ", train['Destination'], " | ", train['DestinationName'], " | ", train['Min'])
+                    if west_train is None:
+                        west_train = Train(train['Destination'], train['DestinationName'], train['Min'])
+            except ValueError:
+                print(f"Warning: Destination {train['Destination']} not found in train_order")
+                continue
 
         if east_train is not None:
             historical_trains[0] = east_train
@@ -331,10 +337,6 @@ def get_trains():
         print(f"Error processing train data: {e}")
         return historical_trains  # Return historical data in case of processing error
 
-    '''
-    for train in trains:
-        print("{}: {}".format(train.destination, train.minutes))
-    '''
     return trains
 
 

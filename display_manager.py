@@ -339,4 +339,4 @@ class display_manager(displayio.Group):
 
     # refresh the root group on the display
     def refresh_display(self):
-        self.display.show(self.root_group)
+        self.display.root_group = self.root_group
